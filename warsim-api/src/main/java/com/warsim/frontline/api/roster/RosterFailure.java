@@ -1,0 +1,23 @@
+package com.warsim.frontline.api.roster;
+
+public enum RosterFailure {
+    NONE,
+    DISABLED,
+    NOT_MODIFIABLE,
+    PLAYER_NOT_ASSIGNED,
+    TEAMS_FULL,
+    TEAM_FULL,
+    SQUADS_FULL,
+    SQUAD_FULL,
+    INVALID_SQUAD,
+    WRONG_TEAM,
+    SWITCH_NOT_ALLOWED,
+    SWITCH_COOLDOWN,
+    NOT_SQUAD_LEADER,
+    TARGET_NOT_IN_SQUAD,
+    FORCE_REQUIRED,
+    BALANCE_LIMIT,
+    STALE_PLAN,
+    INVARIANT_VIOLATION,
+    INTERNAL_ERROR
+}

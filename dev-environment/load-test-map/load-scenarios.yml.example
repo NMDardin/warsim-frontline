@@ -1,0 +1,14 @@
+# Template only. T-010 does not execute synthetic load or create fake players.
+schema-version: 1
+
+# Keep these stable scenario IDs for future T-012 reports:
+# roster_100
+# objective_100_single
+# objective_100_multi
+# weapon_100_close
+# weapon_100_medium
+# weapon_100_long
+# weapon_100_blocked
+# mixed_100
+# idle_baseline
+# cleanup_validation

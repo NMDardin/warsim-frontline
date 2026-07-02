@@ -1,0 +1,119 @@
+node:
+  id: "lobby-01"
+  type: "LOBBY"
+logging:
+  debug: true
+integrations:
+  model-engine:
+    enabled: true
+    required: false
+  mythic-mobs:
+    enabled: true
+    required: false
+database:
+  enabled: false
+  jdbc-url: "jdbc:postgresql://127.0.0.1:5432/warsim_frontline"
+  username: "warsim_frontline"
+  password: ""
+  schema: "warsim_frontline"
+  migrations-enabled: true
+  health-check-interval-seconds: 30
+  pool:
+    maximum-size: 8
+    minimum-idle: 2
+    connection-timeout-millis: 5000
+    validation-timeout-millis: 3000
+    idle-timeout-millis: 600000
+    max-lifetime-millis: 1800000
+    leak-detection-threshold-millis: 0
+  executor:
+    threads: 4
+    queue-capacity: 1000
+    shutdown-timeout-millis: 5000
+redis:
+  enabled: false
+  uri: "redis://127.0.0.1:6379"
+  username: ""
+  password: ""
+  database: 0
+  namespace: "warsim:frontline:v1"
+  tls: { enabled: false, verify-hostname: true }
+  connection: { timeout-millis: 5000, reconnect-delay-millis: 2000 }
+  heartbeat: { interval-millis: 5000, ttl-millis: 15000 }
+  streams:
+    enabled: true
+    block-millis: 2000
+    batch-size: 20
+    claim-idle-millis: 15000
+    message-ttl-millis: 30000
+    maximum-attempts: 3
+    deduplication-ttl-seconds: 120
+    maximum-payload-bytes: 16384
+network:
+  plugin-messaging:
+    enabled: true
+    channel: "warsim:control"
+    request-timeout-millis: 5000
+    maximum-message-bytes: 8192
+transfer:
+  allowed-targets:
+    - "official-war-01"
+match:
+  enabled: false
+  mode: "frontline_offensive"
+  players:
+    minimum-to-start: 40
+    maximum: 100
+    cancel-warmup-below-minimum: true
+    allow-mid-round-join: true
+  timing: { warmup-seconds: 60, round-duration-seconds: 2700, ending-seconds: 15, reset-timeout-seconds: 30 }
+  automation: { auto-start: true, auto-cycle: true }
+  announcements:
+    enabled: true
+    warmup-countdown-seconds: [60, 30, 10, 5, 4, 3, 2, 1]
+teams:
+  enabled: false
+squads:
+  enabled: false
+objectives:
+  enabled: false
+  scan-interval-ticks: 5
+  points: {}
+tickets:
+  enabled: false
+  attackers: { enabled: false, initial: 0, maximum: 0 }
+  defenders: { enabled: false, initial: 0, maximum: 0 }
+  behavior: { end-match-on-attackers-depleted: false }
+
+classes:
+  enabled: true
+
+deployment:
+  enabled: false
+  waiting-game-mode: SPECTATOR
+  combat-game-mode: SURVIVAL
+  waiting-spawn:
+    world: ""
+    x: 0.0
+    y: 0.0
+    z: 0.0
+    yaw: 0.0
+    pitch: 0.0
+
+# 独立WarSimFrontlineWeapons插件的config.yml必须设置：
+# weapons:
+#   enabled: false
+
+combat:
+  enabled: false
+  spawn-protection:
+    enabled: false
+
+hud:
+  enabled: false
+
+kill-feed:
+  enabled: false
+
+feedback:
+  enabled: false

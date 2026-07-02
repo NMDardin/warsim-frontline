@@ -1,0 +1,62 @@
+weapons:
+  enabled: true
+  input:
+    fire-action: "RIGHT_CLICK"
+    reload-action: "DROP_KEY"
+    cancel-vanilla-drop-when-reloading: true
+    cancel-vanilla-interaction-when-armed: true
+  behavior:
+    friendly-fire: false
+    allow-self-damage: false
+    require-playing-state: true
+    require-active-participant: true
+    require-roster-assignment: true
+  ballistics:
+    maximum-candidates-per-shot: 100
+    maximum-range: 200.0
+    maximum-delta-millis: 250
+    head-height-ratio: 0.25
+    epsilon: 0.000001
+  state:
+    reload-check-interval-ticks: 2
+    disconnect-retention-seconds: 0
+  definitions:
+    test_rifle:
+      display-name: "测试步枪"
+      category: "RIFLE"
+      fire-mode: "SEMI_AUTO"
+      craftengine-item-id: "warsim:test_rifle"
+      ammo: { magazine-size: 5, reserve-ammo: 30, reload-millis: 2500 }
+      firing: { rounds-per-minute: 60, maximum-range: 160.0, hip-spread-degrees: 0.35 }
+      damage:
+        head-multiplier: 1.75
+        points:
+          - { distance: 0.0, damage: 34.0 }
+          - { distance: 80.0, damage: 34.0 }
+          - { distance: 160.0, damage: 20.0 }
+    test_pistol:
+      display-name: "测试手枪"
+      category: "PISTOL"
+      fire-mode: "SEMI_AUTO"
+      craftengine-item-id: "warsim:test_pistol"
+      ammo: { magazine-size: 8, reserve-ammo: 32, reload-millis: 1800 }
+      firing: { rounds-per-minute: 240, maximum-range: 80.0, hip-spread-degrees: 0.8 }
+      damage:
+        head-multiplier: 1.5
+        points:
+          - { distance: 0.0, damage: 25.0 }
+          - { distance: 40.0, damage: 20.0 }
+          - { distance: 80.0, damage: 12.0 }
+    test_smg:
+      display-name: "测试冲锋枪"
+      category: "SMG"
+      fire-mode: "SEMI_AUTO"
+      craftengine-item-id: "warsim:test_smg"
+      ammo: { magazine-size: 20, reserve-ammo: 80, reload-millis: 2200 }
+      firing: { rounds-per-minute: 450, maximum-range: 60.0, hip-spread-degrees: 1.5 }
+      damage:
+        head-multiplier: 1.4
+        points:
+          - { distance: 0.0, damage: 18.0 }
+          - { distance: 30.0, damage: 15.0 }
+          - { distance: 60.0, damage: 8.0 }

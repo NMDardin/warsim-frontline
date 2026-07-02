@@ -1,0 +1,15 @@
+name: WarSimFrontlineWeapons
+version: '${version}'
+main: com.warsim.frontline.weapons.paper.WarSimWeaponsPlugin
+api-version: '26.1.2'
+description: Independent CraftEngine-backed hitscan weapons extension for WarSim Frontline
+dependencies:
+  server:
+    WarSimFrontline:
+      load: BEFORE
+      required: true
+      join-classpath: true
+    CraftEngine:
+      load: BEFORE
+      required: true
+      join-classpath: true

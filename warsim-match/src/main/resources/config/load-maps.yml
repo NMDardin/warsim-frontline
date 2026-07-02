@@ -1,0 +1,89 @@
+enabled: true
+
+map:
+  id: "warsim_load_test"
+  version: "1.0.0"
+  world: "warsim_load_test"
+  coordinate-notice: "模板坐标，部署到真实负载测试地图前必须由管理员确认或调整"
+
+zones:
+  spawn_attackers:
+    center: { x: -80.0, y: 80.0, z: 0.0 }
+    radius: { x: 90.0, y: 8.0, z: 90.0 }
+    purposes: ["50_attackers_spawn", "roster_distribution"]
+    maximum-participants: 50
+    scenario-id: "roster_100"
+    version: "1.0.0"
+    description: "模板坐标，部署到真实负载测试地图前必须由管理员确认或调整"
+  spawn_defenders:
+    center: { x: 80.0, y: 80.0, z: 0.0 }
+    radius: { x: 90.0, y: 8.0, z: 90.0 }
+    purposes: ["50_defenders_spawn", "roster_distribution"]
+    maximum-participants: 50
+    scenario-id: "roster_100"
+    version: "1.0.0"
+    description: "模板坐标，部署到真实负载测试地图前必须由管理员确认或调整"
+  objective_dense:
+    center: { x: 0.0, y: 80.0, z: 0.0 }
+    radius: { x: 25.0, y: 8.0, z: 25.0 }
+    purposes: ["single_objective_presence"]
+    maximum-participants: 100
+    scenario-id: "objective_100_single"
+    version: "1.0.0"
+    description: "模板坐标，部署到真实负载测试地图前必须由管理员确认或调整"
+  objective_multi:
+    center: { x: 0.0, y: 80.0, z: 40.0 }
+    radius: { x: 90.0, y: 8.0, z: 90.0 }
+    purposes: ["multi_objective_presence"]
+    maximum-participants: 100
+    scenario-id: "objective_100_multi"
+    version: "1.0.0"
+    description: "模板坐标，部署到真实负载测试地图前必须由管理员确认或调整"
+  weapon_close:
+    center: { x: -40.0, y: 80.0, z: -80.0 }
+    radius: { x: 45.0, y: 8.0, z: 40.0 }
+    purposes: ["close_weapon_lane"]
+    maximum-participants: 100
+    scenario-id: "weapon_100_close"
+    version: "1.0.0"
+    description: "模板坐标，部署到真实负载测试地图前必须由管理员确认或调整"
+  weapon_medium:
+    center: { x: 0.0, y: 80.0, z: -140.0 }
+    radius: { x: 45.0, y: 8.0, z: 40.0 }
+    purposes: ["medium_weapon_lane"]
+    maximum-participants: 100
+    scenario-id: "weapon_100_medium"
+    version: "1.0.0"
+    description: "模板坐标，部署到真实负载测试地图前必须由管理员确认或调整"
+  weapon_long:
+    center: { x: 60.0, y: 80.0, z: -220.0 }
+    radius: { x: 70.0, y: 8.0, z: 40.0 }
+    purposes: ["long_weapon_lane"]
+    maximum-participants: 100
+    scenario-id: "weapon_100_long"
+    version: "1.0.0"
+    description: "模板坐标，部署到真实负载测试地图前必须由管理员确认或调整"
+  weapon_blocked:
+    center: { x: 130.0, y: 80.0, z: -80.0 }
+    radius: { x: 45.0, y: 8.0, z: 40.0 }
+    purposes: ["blocked_weapon_lane"]
+    maximum-participants: 100
+    scenario-id: "weapon_100_blocked"
+    version: "1.0.0"
+    description: "模板坐标，部署到真实负载测试地图前必须由管理员确认或调整"
+  mixed_battle:
+    center: { x: 0.0, y: 80.0, z: 130.0 }
+    radius: { x: 90.0, y: 8.0, z: 90.0 }
+    purposes: ["mixed_roster_objective_weapon_tick"]
+    maximum-participants: 100
+    scenario-id: "mixed_100"
+    version: "1.0.0"
+    description: "模板坐标，部署到真实负载测试地图前必须由管理员确认或调整"
+  idle_control:
+    center: { x: 0.0, y: 80.0, z: 220.0 }
+    radius: { x: 90.0, y: 8.0, z: 90.0 }
+    purposes: ["idle_baseline"]
+    maximum-participants: 0
+    scenario-id: "idle_baseline"
+    version: "1.0.0"
+    description: "模板坐标，部署到真实负载测试地图前必须由管理员确认或调整"

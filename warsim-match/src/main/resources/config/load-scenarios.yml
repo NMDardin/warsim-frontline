@@ -1,0 +1,43 @@
+schema-version: 1
+
+scenarios:
+  roster_100:
+    version: "1.0.0"
+    display-name: "Roster 100人 50v50 小队分布"
+    description: "50 attackers、50 defenders，每方ALPHA至JULIET十个5人小队。模板坐标，部署前必须确认或调整。"
+  objective_100_single:
+    version: "1.0.0"
+    display-name: "单据点100人Presence密集场景"
+    description: "100个槽位围绕objective_dense。模板坐标，部署前必须确认或调整。"
+  objective_100_multi:
+    version: "1.0.0"
+    display-name: "多据点100人Presence分散场景"
+    description: "100个槽位分散在objective_multi区域，供未来1至5据点扫描使用。"
+  weapon_100_close:
+    version: "1.0.0"
+    display-name: "近距离100射手候选场景"
+    description: "近距离射击通道和100个确定性槽位。"
+  weapon_100_medium:
+    version: "1.0.0"
+    display-name: "中距离100射手候选场景"
+    description: "中距离射击通道和100个确定性槽位。"
+  weapon_100_long:
+    version: "1.0.0"
+    display-name: "远距离100射手候选场景"
+    description: "远距离射击通道和100个确定性槽位。"
+  weapon_100_blocked:
+    version: "1.0.0"
+    display-name: "固定墙体遮挡武器场景"
+    description: "包含阻挡位置定义；T-010不会放置方块，管理员需在真实测试地图中准备墙体。"
+  mixed_100:
+    version: "1.0.0"
+    display-name: "混合100人战场场景"
+    description: "Roster、Objective、Weapons和中心tick混合工作负载的固定槽位模板。"
+  idle_baseline:
+    version: "1.0.0"
+    display-name: "空闲基线场景"
+    description: "无玩家槽位、无据点推进，用于后续对照基线。"
+  cleanup_validation:
+    version: "1.0.0"
+    display-name: "清理验证场景"
+    description: "用于未来验证reset和close清理，不会自动执行任何清理动作。"

@@ -1,0 +1,76 @@
+﻿# Gradle generated files
+.gradle/
+**/build/
+build/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+out/
+.settings/
+.classpath
+.project
+
+# Java generated files
+*.class
+hs_err_pid*
+replay_pid*
+
+# Third-party and generated JAR files
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+
+# Runtime servers
+**/plugins/
+**/logs/
+**/cache/
+**/crash-reports/
+**/runtime/
+**/server/
+**/servers/
+
+# Minecraft worlds and player data
+**/world/
+**/world_nether/
+**/world_the_end/
+**/playerdata/
+**/stats/
+**/advancements/
+
+# Local dependencies
+dev-environment/dependencies/
+dev-environment/**/plugins/
+dev-environment/**/*.jar
+
+# Secrets
+.env
+.env.*
+!.env.example
+**/secrets/
+*.secret
+*.key
+*.pem
+*.p12
+*.jks
+credentials.*
+application-local.yml
+application-local.yaml
+application-local.properties
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Operating system
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Archives
+*.zip
+*.7z
+*.rar
+*.tar
+*.gz

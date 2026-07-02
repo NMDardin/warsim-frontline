@@ -1,0 +1,201 @@
+name: WarSimFrontline
+version: '${version}'
+main: com.warsim.frontline.match.WarSimPaperPlugin
+api-version: '26.1.2'
+description: WarSim Frontline Paper runtime
+prefix: WarSim
+softdepend: [ModelEngine, MythicMobs]
+commands:
+  warsim:
+    description: WarSim Frontline status, transfer and dynamically extended battle operations
+    usage: /warsim <status|join|redis|match|team|squad|objective|tickets|weapon|perf|loadmap|class|deploy|deployment>
+permissions:
+  warsim.admin.status:
+    description: View WarSim node status.
+    default: op
+  warsim.admin.loadmap:
+    description: View and prepare WarSim load-test map scenario definitions.
+    default: op
+  warsim.player.join:
+    description: Request transfer from lobby to a battle node.
+    default: true
+  warsim.admin.redis.ping:
+    description: Ping a WarSim node through Redis control plane.
+    default: op
+  warsim.admin.match.status:
+    description: View match status.
+    default: op
+  warsim.admin.match.start:
+    description: Start match warmup.
+    default: op
+  warsim.admin.match.end:
+    description: End current match.
+    default: op
+  warsim.admin.match.reset:
+    description: Reset current match.
+    default: op
+  warsim.admin.match.recover:
+    description: Recover a failed match.
+    default: op
+  warsim.player.squad.status:
+    description: View own squad status.
+    default: true
+  warsim.player.squad.list:
+    description: List squads.
+    default: true
+  warsim.player.squad.join:
+    description: Join a squad.
+    default: true
+  warsim.player.squad.leave:
+    description: Leave a squad.
+    default: true
+  warsim.player.squad.leader:
+    description: Transfer squad leadership.
+    default: true
+  warsim.admin.team.status:
+    description: View team status.
+    default: op
+  warsim.admin.team.list:
+    description: List teams.
+    default: op
+  warsim.admin.team.player:
+    description: Inspect a player's team assignment.
+    default: op
+  warsim.admin.team.move:
+    description: Move player between teams.
+    default: op
+  warsim.admin.team.rebalance:
+    description: Rebalance a player.
+    default: op
+  warsim.admin.squad.inspect:
+    description: Inspect a squad.
+    default: op
+  warsim.admin.squad.leader:
+    description: Admin transfer squad leadership.
+    default: op
+  warsim.admin.squad.move:
+    description: Admin move player to squad.
+    default: op
+  warsim.admin.squad.remove:
+    description: Admin remove player from squad.
+    default: op
+  warsim.admin.objective.status:
+    description: View objective status.
+    default: op
+  warsim.admin.objective.list:
+    description: List objectives.
+    default: op
+  warsim.admin.objective.lock:
+    description: Lock objective.
+    default: op
+  warsim.admin.objective.unlock:
+    description: Unlock objective.
+    default: op
+  warsim.admin.objective.reset:
+    description: Reset objective.
+    default: op
+  warsim.admin.objective.setowner:
+    description: Set objective owner.
+    default: op
+  warsim.admin.tickets.status:
+    description: View ticket status.
+    default: op
+  warsim.admin.tickets.modify:
+    description: Modify tickets.
+    default: op
+  warsim.admin.weapon.status:
+    description: View independent weapon plugin status.
+    default: op
+  warsim.admin.weapon.list:
+    description: List test weapons.
+    default: op
+  warsim.admin.weapon.give:
+    description: Give CraftEngine test weapon.
+    default: op
+  warsim.admin.weapon.ammo:
+    description: Inspect weapon ammo.
+    default: op
+  warsim.admin.weapon.refill:
+    description: Refill test weapon ammo.
+    default: op
+  warsim.admin.weapon.clear:
+    description: Clear WarSim test weapons.
+    default: op
+  warsim.admin.weapon.inspect:
+    description: Inspect held CraftEngine weapon mapping.
+    default: op
+  warsim.admin.perf.status:
+    description: View performance sampler status, metrics, alerts and snapshots.
+    default: op
+  warsim.admin.perf.export:
+    description: Export performance sampler report.
+    default: op
+  warsim.admin.perf.scenario:
+    description: View synthetic scenario and dry-run plans.
+    default: op
+  warsim.admin.perf.synthetic:
+    description: Control synthetic execution tasks.
+    default: op
+  warsim.admin.perf.reset:
+    description: Reset performance sampler windows.
+    default: op
+  warsim.player.class.status:
+    description: View your current WarSim combat class state.
+    default: true
+  warsim.player.class.list:
+    description: List available WarSim combat classes.
+    default: true
+  warsim.player.class.select:
+    description: Select or queue a WarSim combat class.
+    default: true
+  warsim.player.deploy:
+    description: Request deployment into the current battle.
+    default: true
+  warsim.player.deploy.cancel:
+    description: Cancel your pending deployment countdown.
+    default: true
+  warsim.admin.class.status:
+    description: View another player's WarSim combat class state.
+    default: op
+  warsim.admin.class.set:
+    description: Set a player's WarSim combat class.
+    default: op
+  warsim.admin.class.clear:
+    description: Clear a player's WarSim combat class and managed loadout.
+    default: op
+  warsim.admin.deployment.status:
+    description: View WarSim deployment subsystem status.
+    default: op
+  warsim.admin.deployment.spawn.list:
+    description: List configured WarSim deployment spawn points.
+    default: op
+  warsim.admin.deployment.force:
+    description: Force a player deployment while keeping all hard safety checks.
+    default: op
+  warsim.player.stats:
+    description: View current-match combat statistics.
+    default: true
+  warsim.player.hud.status:
+    description: View WarSim combat HUD state.
+    default: true
+  warsim.player.hud.toggle:
+    description: Toggle WarSim combat HUD for this connection.
+    default: true
+  warsim.player.killfeed.toggle:
+    description: Toggle WarSim kill feed for this connection.
+    default: true
+  warsim.admin.combat.status:
+    description: View WarSim combat outcome subsystem status.
+    default: op
+  warsim.admin.combat.clear:
+    description: Clear current-match combat stats and unresolved contributions for a player.
+    default: op
+  warsim.admin.combat.protection:
+    description: Inspect a player's WarSim spawn protection.
+    default: op
+  warsim.admin.combat.protection.clear:
+    description: Clear a player's WarSim spawn protection.
+    default: op
+  warsim.admin.hud.refresh:
+    description: Refresh WarSim combat HUD ownership state.
+    default: op

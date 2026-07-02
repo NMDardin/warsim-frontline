@@ -1,0 +1,13 @@
+# Template only. Coordinates must be confirmed or adjusted by an administrator.
+enabled: true
+map:
+  id: "warsim_load_test"
+  version: "1.0.0"
+  world: "warsim_load_test"
+  coordinate-notice: "模板坐标，部署到真实负载测试地图前必须由管理员确认或调整"
+
+# The packaged plugin template contains the full ten-zone definition.
+# Keep these stable zone IDs:
+# spawn_attackers, spawn_defenders, objective_dense, objective_multi,
+# weapon_close, weapon_medium, weapon_long, weapon_blocked,
+# mixed_battle, idle_control

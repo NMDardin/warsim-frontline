@@ -1,0 +1,265 @@
+node:
+  id: "official-war-01"
+  type: "OFFICIAL_BATTLE"
+
+logging:
+  debug: false
+
+integrations:
+  model-engine:
+    enabled: true
+    required: false
+  mythic-mobs:
+    enabled: true
+    required: false
+
+database:
+  enabled: false
+  jdbc-url: "jdbc:postgresql://127.0.0.1:5432/warsim_frontline"
+  username: "warsim_frontline"
+  password: ""
+  schema: "warsim_frontline"
+  migrations-enabled: true
+  health-check-interval-seconds: 30
+  pool:
+    maximum-size: 8
+    minimum-idle: 2
+    connection-timeout-millis: 5000
+    validation-timeout-millis: 3000
+    idle-timeout-millis: 600000
+    max-lifetime-millis: 1800000
+    leak-detection-threshold-millis: 0
+  executor:
+    threads: 4
+    queue-capacity: 1000
+    shutdown-timeout-millis: 5000
+
+redis:
+  enabled: false
+  uri: "redis://127.0.0.1:6379"
+  username: ""
+  password: ""
+  database: 0
+  namespace: "warsim:frontline:v1"
+  tls:
+    enabled: false
+    verify-hostname: true
+  connection:
+    timeout-millis: 5000
+    reconnect-delay-millis: 2000
+  heartbeat:
+    interval-millis: 5000
+    ttl-millis: 15000
+  streams:
+    enabled: true
+    block-millis: 2000
+    batch-size: 20
+    claim-idle-millis: 15000
+    message-ttl-millis: 30000
+    maximum-attempts: 3
+    deduplication-ttl-seconds: 120
+    maximum-payload-bytes: 16384
+
+network:
+  plugin-messaging:
+    enabled: true
+    channel: "warsim:control"
+    request-timeout-millis: 5000
+    maximum-message-bytes: 8192
+
+transfer:
+  allowed-targets:
+    - "official-war-01"
+
+match:
+  enabled: true
+  mode: "frontline_offensive"
+  players:
+    minimum-to-start: 40
+    maximum: 100
+    cancel-warmup-below-minimum: true
+    allow-mid-round-join: true
+  timing:
+    warmup-seconds: 60
+    round-duration-seconds: 2700
+    ending-seconds: 15
+    reset-timeout-seconds: 30
+  automation:
+    auto-start: true
+    auto-cycle: true
+  announcements:
+    enabled: true
+    warmup-countdown-seconds: [60, 30, 10, 5, 4, 3, 2, 1]
+
+teams:
+  enabled: true
+  assignment:
+    mode: "AUTO_BALANCE"
+    maximum-difference: 1
+    deterministic-tie-break: true
+  attackers:
+    maximum-players: 50
+    display-name: "进攻方"
+  defenders:
+    maximum-players: 50
+    display-name: "防守方"
+
+squads:
+  enabled: true
+  maximum-per-team: 10
+  maximum-members: 5
+  assignment:
+    auto-assign: true
+    prefer-existing-squads: true
+  switching:
+    enabled: true
+    allow-during-waiting: true
+    allow-during-warmup: true
+    allow-during-playing: true
+    cooldown-seconds: 15
+  reconnect:
+    restore-assignment: true
+    grace-seconds: 120
+
+# 测试据点坐标；正式地图制作时必须调整。
+objectives:
+  enabled: true
+  scan-interval-ticks: 5
+  points:
+    alpha:
+      display-name: "A点"
+      world: "world"
+      center: { x: 0.5, y: 64.0, z: 0.5 }
+      radius: 8.0
+      vertical-range: 6.0
+      initial-owner: "DEFENDERS"
+      locked: false
+      capture:
+        base-seconds: 30
+        maximum-effective-players: 4
+        additional-player-rate: 0.5
+        empty-behavior: "RETURN_TO_OWNER"
+        contested-behavior: "FREEZE"
+      rewards:
+        attackers-capture-tickets: 50
+        defenders-capture-tickets: 0
+
+tickets:
+  enabled: true
+  attackers: { enabled: true, initial: 300, maximum: 500 }
+  defenders: { enabled: false, initial: 0, maximum: 0 }
+  behavior:
+    end-match-on-attackers-depleted: true
+
+classes:
+  enabled: true
+  configuration-revision: 1
+  definitions:
+    assault:
+      display-name: "突击兵"
+      maximum-players: 100
+      equipment:
+        primary-weapon: { type: "weapon", weapon-id: "test_rifle" }
+        secondary-weapon: { type: "weapon", weapon-id: "test_pistol" }
+    medic:
+      display-name: "医护兵"
+      maximum-players: 100
+      equipment:
+        primary-weapon: { type: "weapon", weapon-id: "test_rifle" }
+        secondary-weapon: { type: "weapon", weapon-id: "test_pistol" }
+    support:
+      display-name: "支援兵"
+      maximum-players: 100
+      equipment:
+        primary-weapon: { type: "weapon", weapon-id: "test_smg" }
+        secondary-weapon: { type: "weapon", weapon-id: "test_pistol" }
+    scout:
+      display-name: "侦察兵"
+      maximum-players: 100
+      equipment:
+        primary-weapon: { type: "weapon", weapon-id: "test_rifle" }
+        secondary-weapon: { type: "weapon", weapon-id: "test_pistol" }
+
+deployment:
+  enabled: false
+  waiting-game-mode: SPECTATOR
+  combat-game-mode: SURVIVAL
+  countdown-seconds: 5
+  safe-radius: 2
+  maximum-spawn-candidates: 128
+  ticket-cost:
+    initial-deployment:
+      attackers: 0
+      defenders: 0
+    respawn:
+      attackers: 1
+      defenders: 0
+  waiting-spawn:
+    world: ""
+    x: 0.0
+    y: 0.0
+    z: 0.0
+    yaw: 0.0
+    pitch: 0.0
+
+combat:
+  enabled: true
+  damage-correlation-ttl-millis: 2000
+  assists:
+    minimum-damage: 20.0
+    minimum-percentage: 0.20
+    attribution-ttl-seconds: 10
+    maximum-contributors-per-target: 8
+  environmental-attribution:
+    enabled: false
+    ttl-seconds: 3
+  spawn-protection:
+    enabled: true
+    duration-seconds: 5
+    block-incoming-damage: true
+    remove-on-weapon-fire: true
+    remove-on-melee-attack: true
+    remove-on-objective-presence: true
+    remove-on-leave-radius: true
+    protected-radius: 5.0
+
+hud:
+  enabled: true
+  update-interval-ticks: 10
+  show-match-time: true
+  show-tickets: true
+  show-objectives: true
+  show-squad: true
+  show-class: true
+  show-kda: true
+  show-deployment: true
+
+kill-feed:
+  enabled: true
+  maximum-entries: 20
+  ttl-seconds: 8
+  throttle-millis: 1000
+  scope: "ALL"
+
+feedback:
+  enabled: true
+
+performance:
+  enabled: true
+  maximum-metrics: 128
+  samples-per-metric: 512
+  alerts:
+    warning-threshold-nanos: 25000000
+    critical-threshold-nanos: 50000000
+    cooldown-millis: 10000
+    maximum-history: 64
+  reports:
+    directory: "performance-reports"
+    maximum-files: 20
+  synthetic:
+    enabled: false
+    executor-queue-capacity: 1
+    default-warmup-iterations: 5
+    default-measurement-iterations: 50
+    maximum-iterations: 10000
+    maximum-duration-millis: 30000

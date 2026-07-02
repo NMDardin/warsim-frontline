@@ -1,0 +1,22 @@
+items:
+  warsim:test_rifle:
+    material: iron_horse_armor
+    data:
+      item_name: "<!i><white>测试步枪"
+      lore:
+        - "<!i><gray>WarSim T-008 测试物品"
+    model: warsim:item/test_rifle
+  warsim:test_pistol:
+    material: golden_horse_armor
+    data:
+      item_name: "<!i><white>测试手枪"
+      lore:
+        - "<!i><gray>WarSim T-008 测试物品"
+    model: warsim:item/test_pistol
+  warsim:test_smg:
+    material: diamond_horse_armor
+    data:
+      item_name: "<!i><white>测试冲锋枪"
+      lore:
+        - "<!i><gray>WarSim T-008 测试物品"
+    model: warsim:item/test_smg
