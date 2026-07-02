@@ -1,2 +1,0 @@
-# warsim-frontline
-WarSimc BF
