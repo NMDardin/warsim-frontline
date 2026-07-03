@@ -32,6 +32,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.ArrayDeque;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 import java.util.function.Predicate;
 import org.bukkit.Bukkit;
@@ -89,8 +90,15 @@ public final class PaperMatchCoordinator implements AutoCloseable {
         this.objectiveConfiguration = objectiveConfiguration;
         this.objectiveConfigurationError = objectiveConfigurationError;
         this.ticketConfigurationError = ticketConfigurationError;
+        AtomicReference<DefaultMatchService> serviceRef = new AtomicReference<>();
         this.resetService = new PaperMatchResetService(
-            plugin, roundResetConfiguration, localSessionActive
+            plugin,
+            roundResetConfiguration,
+            localSessionActive,
+            () -> {
+                DefaultMatchService current = serviceRef.get();
+                return current == null ? null : current.snapshot();
+            }
         );
         this.service = new DefaultMatchService(
             nodeId,
@@ -111,6 +119,7 @@ public final class PaperMatchCoordinator implements AutoCloseable {
                 exception
             )
         );
+        serviceRef.set(this.service);
         this.roster = new DefaultRosterService(
             service.snapshot().matchId(), rosterConfiguration, Instant.now()
         );
@@ -138,6 +147,11 @@ public final class PaperMatchCoordinator implements AutoCloseable {
         service.subscribe(event -> {
             if (event instanceof MatchStateChangedEvent changed) {
                 publishBattleSnapshotIfChanged(changed.occurredAt());
+                if (changed.transition().nextState() != MatchState.RESETTING) {
+                    resetService.cancelIfActiveContextInvalid(
+                        "Round Reset context changed to " + changed.transition().nextState()
+                    );
+                }
             }
         }, false);
         if (configurationError != null) {

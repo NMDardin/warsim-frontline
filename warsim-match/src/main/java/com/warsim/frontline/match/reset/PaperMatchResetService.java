@@ -3,6 +3,8 @@ package com.warsim.frontline.match.reset;
 import com.warsim.frontline.api.match.MatchResetContext;
 import com.warsim.frontline.api.match.MatchResetResult;
 import com.warsim.frontline.api.match.MatchResetService;
+import com.warsim.frontline.api.match.MatchSnapshot;
+import com.warsim.frontline.api.match.MatchState;
 import com.warsim.frontline.match.config.ResetHoldingSpawn;
 import com.warsim.frontline.match.config.RoundResetPaperConfiguration;
 import java.time.Duration;
@@ -13,6 +15,8 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
+import java.util.logging.Level;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
@@ -34,6 +38,7 @@ public final class PaperMatchResetService implements MatchResetService, AutoClos
     private final JavaPlugin plugin;
     private final RoundResetPaperConfiguration configuration;
     private final Predicate<UUID> localSessionActive;
+    private final Supplier<MatchSnapshot> matchSnapshotSupplier;
     private boolean closed;
     private ResetKey activeKey;
     private CompletableFuture<MatchResetResult> activeFuture;
@@ -66,11 +71,13 @@ public final class PaperMatchResetService implements MatchResetService, AutoClos
     public PaperMatchResetService(
         JavaPlugin plugin,
         RoundResetPaperConfiguration configuration,
-        Predicate<UUID> localSessionActive
+        Predicate<UUID> localSessionActive,
+        Supplier<MatchSnapshot> matchSnapshotSupplier
     ) {
         this.plugin = Objects.requireNonNull(plugin, "plugin");
         this.configuration = Objects.requireNonNull(configuration, "configuration");
         this.localSessionActive = Objects.requireNonNull(localSessionActive, "localSessionActive");
+        this.matchSnapshotSupplier = Objects.requireNonNull(matchSnapshotSupplier, "matchSnapshotSupplier");
     }
 
     @Override
@@ -113,10 +120,30 @@ public final class PaperMatchResetService implements MatchResetService, AutoClos
                 finishActive(key, future, MatchResetResult.failure("Round Reset task scheduling failed"));
             }
         } catch (RuntimeException exception) {
-            plugin.getLogger().warning("[warsim-reset] Failed to schedule Round Reset: " + exception.getMessage());
+            plugin.getLogger().log(Level.WARNING, "[warsim-reset] Failed to schedule Round Reset", exception);
             finishActive(key, future, MatchResetResult.failure("Round Reset task scheduling failed"));
         }
         return future;
+    }
+
+    public boolean cancelIfActiveContextInvalid(String reason) {
+        ResetKey key;
+        synchronized (this) {
+            if (activeKey == null || activeFuture == null) return false;
+            key = activeKey;
+        }
+        String failure = resetContextFailure(key);
+        if (failure == null) return false;
+        return cancelIfActive(key.matchId(), key.lifecycleRevision(), reason + ": " + failure);
+    }
+
+    public synchronized boolean cancelIfActive(UUID matchId, long lifecycleRevision, String reason) {
+        ResetKey key = new ResetKey(matchId, lifecycleRevision);
+        if (!key.equals(activeKey) || activeFuture == null) return false;
+        CompletableFuture<MatchResetResult> future = activeFuture;
+        cancelScheduledTaskLocked();
+        finishActive(key, future, MatchResetResult.failure(sanitize(reason)));
+        return true;
     }
 
     public synchronized List<String> statusLines() {
@@ -147,6 +174,12 @@ public final class PaperMatchResetService implements MatchResetService, AutoClos
                 return;
             }
         }
+        String contextFailure = resetContextFailure(key);
+        if (contextFailure != null) {
+            plugin.getLogger().warning("[warsim-reset] " + contextFailure);
+            finishActive(key, future, MatchResetResult.failure(contextFailure));
+            return;
+        }
         ResetReport report = new ResetReport();
         try {
             if (configuration.evacuateOnlinePlayers()) {
@@ -155,7 +188,7 @@ public final class PaperMatchResetService implements MatchResetService, AutoClos
             collectAndRemoveTransientEntities(report);
         } catch (RuntimeException exception) {
             report.fail("Round Reset failed: " + sanitize(exception.getMessage()));
-            plugin.getLogger().warning("[warsim-reset] Round Reset threw: " + exception.getMessage());
+            plugin.getLogger().log(Level.WARNING, "[warsim-reset] Round Reset threw", exception);
         }
         MatchResetResult result = report.successful()
             ? new MatchResetResult(true, successSummary(key, report))
@@ -191,8 +224,11 @@ public final class PaperMatchResetService implements MatchResetService, AutoClos
             } catch (RuntimeException exception) {
                 report.evacuationFailures++;
                 report.fail("Player evacuation failed");
-                plugin.getLogger().warning("[warsim-reset] Player evacuation threw playerUuid="
-                    + player.getUniqueId() + " reason=" + exception.getMessage());
+                plugin.getLogger().log(
+                    Level.WARNING,
+                    "[warsim-reset] Player evacuation threw playerUuid=" + player.getUniqueId(),
+                    exception
+                );
             }
         }
     }
@@ -243,9 +279,12 @@ public final class PaperMatchResetService implements MatchResetService, AutoClos
             } catch (RuntimeException exception) {
                 report.entityRemovalFailures++;
                 report.fail("Transient entity removal failed");
-                plugin.getLogger().warning("[warsim-reset] Entity removal threw type="
-                    + entity.getType() + " uuid=" + entity.getUniqueId()
-                    + " reason=" + exception.getMessage());
+                plugin.getLogger().log(
+                    Level.WARNING,
+                    "[warsim-reset] Entity removal threw type="
+                        + entity.getType() + " uuid=" + entity.getUniqueId(),
+                    exception
+                );
             }
         }
     }
@@ -306,6 +345,37 @@ public final class PaperMatchResetService implements MatchResetService, AutoClos
         return MatchResetResult.failure(lastErrorSummary);
     }
 
+    private String resetContextFailure(ResetKey key) {
+        MatchSnapshot snapshot;
+        try {
+            snapshot = matchSnapshotSupplier.get();
+        } catch (RuntimeException exception) {
+            plugin.getLogger().log(Level.WARNING, "[warsim-reset] Round Reset context validation threw", exception);
+            return "Round Reset context validation failed matchId=" + key.matchId()
+                + " revision=" + key.lifecycleRevision();
+        }
+        if (snapshot == null) {
+            return "Round Reset context unavailable matchId=" + key.matchId()
+                + " revision=" + key.lifecycleRevision();
+        }
+        if (!Objects.equals(snapshot.matchId(), key.matchId())) {
+            return "Round Reset context stale matchId=" + key.matchId()
+                + " revision=" + key.lifecycleRevision()
+                + " currentMatchId=" + snapshot.matchId();
+        }
+        if (snapshot.lifecycleRevision() != key.lifecycleRevision()) {
+            return "Round Reset context stale matchId=" + key.matchId()
+                + " revision=" + key.lifecycleRevision()
+                + " currentRevision=" + snapshot.lifecycleRevision();
+        }
+        if (snapshot.state() != MatchState.RESETTING) {
+            return "Round Reset context stale matchId=" + key.matchId()
+                + " revision=" + key.lifecycleRevision()
+                + " currentState=" + snapshot.state();
+        }
+        return null;
+    }
+
     private static String successSummary(ResetKey key, ResetReport report) {
         return "Round Reset complete matchId=" + key.matchId()
             + " revision=" + key.lifecycleRevision()
@@ -323,13 +393,17 @@ public final class PaperMatchResetService implements MatchResetService, AutoClos
     public synchronized void close() {
         if (closed) return;
         closed = true;
-        if (scheduledTaskId >= 0) {
-            Bukkit.getScheduler().cancelTask(scheduledTaskId);
-            scheduledTaskId = -1;
-        }
+        cancelScheduledTaskLocked();
         if (activeFuture != null && activeKey != null) {
             finishActive(activeKey, activeFuture,
                 MatchResetResult.failure("Plugin is shutting down; Round Reset was cancelled"));
+        }
+    }
+
+    private void cancelScheduledTaskLocked() {
+        if (scheduledTaskId >= 0) {
+            Bukkit.getScheduler().cancelTask(scheduledTaskId);
+            scheduledTaskId = -1;
         }
     }
 
