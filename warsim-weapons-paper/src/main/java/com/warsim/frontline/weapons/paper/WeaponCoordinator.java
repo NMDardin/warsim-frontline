@@ -55,9 +55,6 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
         this.damage = new PaperDamageAdapter(plugin, runtime, attribution, service);
         this.runtimeSubscription = runtime.subscribe(this);
         plugin.getServer().getPluginManager().registerEvents(this, plugin);
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            reconcilePlayerInventory(player, "startup");
-        }
     }
 
     DefaultWeaponService service() { return service; }
@@ -468,6 +465,18 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
                 if (registration != null) registration.getProvider().clear(player.getUniqueId(), FeedbackChannel.WEAPON);
             } catch (RuntimeException exception) {
                 plugin.getLogger().log(Level.WARNING, "[warsim-weapons] Shared weapon feedback clearAll failed.", exception);
+            }
+        }
+    }
+
+    void reconcileOnlinePlayers() {
+        if (closed) return;
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            try {
+                reconcilePlayerInventory(player, "startup");
+            } catch (RuntimeException exception) {
+                plugin.getLogger().log(Level.WARNING,
+                    "[warsim-weapons] Managed inventory reconcile failed during startup.", exception);
             }
         }
     }

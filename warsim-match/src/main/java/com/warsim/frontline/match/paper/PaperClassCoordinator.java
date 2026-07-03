@@ -285,6 +285,7 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
                 return;
             }
             tx.preparedToken = prepared.token();
+            if (!continueOrRollback(player, tx, "prepareLoadout")) return;
             spawn = resolveSpawn(tx.context.teamSide()).orElse(null);
             if (spawn == null) {
                 service.mutableMetrics().unsafeSpawnRejections.incrementAndGet();
@@ -296,36 +297,36 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
                 failBeforeCommit(player, tx, capacity.failureReason(), capacity.message());
                 return;
             }
-            TicketOperationResult charge = chargeTickets(tx.context);
+            TicketOperationResult charge = chargeTickets(tx);
             if (!charge.successful()) {
                 failBeforeCommit(player, tx, DeploymentFailureReason.TICKETS_DEPLETED, charge.message());
                 return;
             }
-            if (charge.change() != null && charge.change().appliedDelta() < 0) {
-                tx.ticketCharged = true;
-                tx.chargeOperationId = charge.change().operationId();
-            }
+            if (!continueOrRollback(player, tx, "chargeTickets")) return;
             tx.context = tx.context.stage(DeploymentTransactionStage.TICKET_CHARGED);
             resetLifeState(player.getUniqueId(), tx.context.matchId(), tx.context.deploymentRevision(),
                 tx.context.proposedLifeRevision(), "before-grant");
-            if (!transactionCanContinue(player, tx)) return;
+            if (!continueOrRollback(player, tx, "resetLifeState")) return;
             if (!player.teleport(spawn)) throw new IllegalStateException("teleport failed");
             tx.teleported = true;
-            if (!transactionCanContinue(player, tx)) return;
+            if (!continueOrRollback(player, tx, "teleport")) return;
             player.setGameMode(combatGameMode());
-            if (!transactionCanContinue(player, tx)) return;
+            if (!continueOrRollback(player, tx, "setGameMode")) return;
             tx.context = tx.context.stage(DeploymentTransactionStage.TELEPORTED);
             LoadoutProvisionResult granted = tx.provider.grantPreparedLoadout(prepared.token());
             if (!granted.successful()) throw new IllegalStateException(granted.message());
-            if (!transactionCanContinue(player, tx)) return;
             tx.loadoutGranted = true;
             tx.preparedTokenConsumed = true;
+            if (!continueOrRollback(player, tx, "grantPreparedLoadout")) return;
             tx.context = tx.context.stage(DeploymentTransactionStage.LOADOUT_GRANTED);
             double maximumHealth = player.getAttribute(Attribute.MAX_HEALTH) == null
                 ? 20.0 : player.getAttribute(Attribute.MAX_HEALTH).getValue();
             player.setHealth(Math.min(maximumHealth, 20.0));
+            if (!continueOrRollback(player, tx, "setHealth")) return;
             player.setFireTicks(0);
+            if (!continueOrRollback(player, tx, "setFireTicks")) return;
             tx.context = tx.context.stage(DeploymentTransactionStage.HEALTH_RESTORED);
+            if (!continueOrRollback(player, tx, "beforeMarkAlive")) return;
             DeploymentResult alive = tx.owningService.markAlive(tx.context, Instant.now());
             if (!alive.successful()) throw new IllegalStateException(alive.message());
             tx.aliveCommitted = true;
@@ -360,12 +361,63 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
         }
     }
 
-    private boolean transactionCanContinue(Player player, DeploymentTransactionState tx) {
-        if (tx.rolledBack || tx.aliveCommitted || !player.isOnline()) return false;
-        if (inFlightDeployments.get(player.getUniqueId()) != tx) return false;
-        return tx.owningService.activeDeployment(player.getUniqueId())
-            .map(context -> context.deploymentRevision() == tx.deploymentRevision)
-            .orElse(false);
+    private boolean continueOrRollback(Player player, DeploymentTransactionState tx, String checkpoint) {
+        TransactionValidation validation = validateTransactionContext(player, tx);
+        if (validation.valid()) return true;
+        if (tx.rollbackResult != null || tx.rolledBack || tx.aliveCommitted) return false;
+        plugin.getLogger().warning("[warsim-classes] deployment context invalid checkpoint="
+            + checkpoint
+            + " playerUuid=" + tx.context.playerUuid()
+            + " matchId=" + tx.context.matchId()
+            + " lifecycleRevision=" + tx.context.lifecycleRevision()
+            + " deploymentRevision=" + tx.deploymentRevision
+            + " currentMatchState=" + validation.currentMatchState()
+            + " reason=" + validation.reason());
+        compensateBeforeCommit(player, tx);
+        return false;
+    }
+
+    private TransactionValidation validateTransactionContext(Player player, DeploymentTransactionState tx) {
+        var match = matchCoordinator.snapshot();
+        MatchState currentState = match.state();
+        UUID playerUuid = tx.context.playerUuid();
+        if (tx.rolledBack) return TransactionValidation.rejected("already rolled back", currentState);
+        if (tx.aliveCommitted) return TransactionValidation.rejected("already committed", currentState);
+        if (player == null) return TransactionValidation.rejected("player missing", currentState);
+        if (!player.getUniqueId().equals(playerUuid)) return TransactionValidation.rejected("player uuid mismatch", currentState);
+        if (!player.isOnline()) return TransactionValidation.rejected("player offline", currentState);
+        if (inFlightDeployments.get(playerUuid) != tx) return TransactionValidation.rejected("in-flight transaction replaced", currentState);
+        var active = tx.owningService.activeDeployment(playerUuid);
+        if (active.isEmpty()) return TransactionValidation.rejected("active deployment missing", currentState);
+        if (active.get().deploymentRevision() != tx.deploymentRevision) {
+            return TransactionValidation.rejected("deployment revision mismatch", currentState);
+        }
+        if (!active.get().matchId().equals(tx.context.matchId())) {
+            return TransactionValidation.rejected("active deployment match mismatch", currentState);
+        }
+        if (!tx.context.matchId().equals(match.matchId())) return TransactionValidation.rejected("current match mismatch", currentState);
+        if (match.lifecycleRevision() != tx.context.lifecycleRevision()) {
+            return TransactionValidation.rejected("lifecycle revision mismatch", currentState);
+        }
+        if (currentState != MatchState.PLAYING) return TransactionValidation.rejected("match is not PLAYING", currentState);
+        var participant = matchCoordinator.participant(playerUuid);
+        if (participant.isEmpty()) return TransactionValidation.rejected("participant missing", currentState);
+        if (participant.get().state() != MatchParticipantState.ACTIVE) {
+            return TransactionValidation.rejected("participant not active", currentState);
+        }
+        if (!participant.get().matchId().equals(tx.context.matchId())) {
+            return TransactionValidation.rejected("participant match mismatch", currentState);
+        }
+        var assignment = matchCoordinator.assignment(playerUuid);
+        if (assignment.isEmpty()) return TransactionValidation.rejected("assignment missing", currentState);
+        if (!assignment.get().connected()) return TransactionValidation.rejected("assignment disconnected", currentState);
+        if (!assignment.get().matchId().equals(tx.context.matchId())) {
+            return TransactionValidation.rejected("assignment match mismatch", currentState);
+        }
+        if (assignment.get().teamSide() != tx.context.teamSide()) {
+            return TransactionValidation.rejected("assignment team mismatch", currentState);
+        }
+        return TransactionValidation.ok(currentState);
     }
 
     private void postCommitSpawnProtection(Player player, DeploymentContext context, Location spawn, long nowNanos) {
@@ -426,18 +478,26 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
         return true;
     }
 
-    private TicketOperationResult chargeTickets(DeploymentContext context) {
+    private TicketOperationResult chargeTickets(DeploymentTransactionState tx) {
+        DeploymentContext context = tx.context;
         int cost = deploymentConfiguration.ticketCosts().cost(context.reason(), context.teamSide());
         if (cost == 0) {
             return new TicketOperationResult(true, false, "No ticket charge required",
-                matchCoordinator.ticketService() == null ? null : matchCoordinator.ticketService().snapshot(), null);
+                null, null);
         }
         TicketService tickets = matchCoordinator.ticketService();
         if (tickets == null) return TicketOperationResult.rejected("Ticket service is unavailable", null);
-        return tickets.tryConsume(new TicketOperation(
+        TicketOperationResult result = tickets.tryConsume(new TicketOperation(
             chargeOperationId(context), context.teamSide(), TicketOperationType.TAKE,
             cost, TicketChangeReason.RESPAWN_COST, Instant.now()
         ));
+        if (result.successful() && result.change() != null && result.change().appliedDelta() < 0) {
+            tx.chargedTicketService = tickets;
+            tx.ticketCharged = true;
+            tx.chargeOperationId = result.change().operationId();
+            tx.chargedTicketAmount = Math.abs(result.change().appliedDelta());
+        }
+        return result;
     }
 
     private void failBeforeCommit(
@@ -542,15 +602,24 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
     }
 
     private void refundTicketCharge(DeploymentTransactionState tx) {
-        if (!tx.ticketCharged || tx.chargeOperationId == null || matchCoordinator.ticketService() == null) return;
+        if (tx.ticketRefundAttempted
+            || !tx.ticketCharged
+            || tx.chargedTicketService == null
+            || tx.chargeOperationId == null
+            || tx.chargedTicketAmount <= 0
+            || tx.aliveCommitted) return;
+        tx.ticketRefundAttempted = true;
         try {
-            int cost = deploymentConfiguration.ticketCosts().cost(tx.context.reason(), tx.context.teamSide());
-            TicketOperationResult refund = matchCoordinator.ticketService().refund(new TicketOperation(
+            TicketOperationResult refund = tx.chargedTicketService.refund(new TicketOperation(
                 refundOperationId(tx.context), tx.context.teamSide(), TicketOperationType.ADD,
-                cost, TicketChangeReason.RESPAWN_REFUND, Instant.now()
+                tx.chargedTicketAmount, TicketChangeReason.RESPAWN_REFUND, Instant.now()
             ), tx.chargeOperationId);
-            if (refund.successful()) tx.owningService.mutableMetrics().ticketRefunds.incrementAndGet();
-            else tx.owningService.mutableMetrics().ticketRefundFailures.incrementAndGet();
+            if (refund.successful()) {
+                tx.ticketRefunded = true;
+                tx.owningService.mutableMetrics().ticketRefunds.incrementAndGet();
+            } else {
+                tx.owningService.mutableMetrics().ticketRefundFailures.incrementAndGet();
+            }
         } catch (RuntimeException exception) {
             tx.owningService.mutableMetrics().ticketRefundFailures.incrementAndGet();
             plugin.getLogger().log(Level.WARNING, "[warsim-classes] ticket refund threw during rollback", exception);
@@ -745,7 +814,11 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
         private LoadoutPreparationToken preparedToken;
         private boolean preparedTokenConsumed;
         private boolean ticketCharged;
+        private TicketService chargedTicketService;
+        private int chargedTicketAmount;
         private UUID chargeOperationId;
+        private boolean ticketRefundAttempted;
+        private boolean ticketRefunded;
         private boolean teleported;
         private boolean loadoutGranted;
         private boolean aliveCommitted;
@@ -756,6 +829,15 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
             this.context = context;
             this.owningService = owningService;
             this.deploymentRevision = context.deploymentRevision();
+        }
+    }
+
+    private record TransactionValidation(boolean valid, String reason, MatchState currentMatchState) {
+        private static TransactionValidation ok(MatchState currentMatchState) {
+            return new TransactionValidation(true, "ok", currentMatchState);
+        }
+        private static TransactionValidation rejected(String reason, MatchState currentMatchState) {
+            return new TransactionValidation(false, reason, currentMatchState);
         }
     }
 

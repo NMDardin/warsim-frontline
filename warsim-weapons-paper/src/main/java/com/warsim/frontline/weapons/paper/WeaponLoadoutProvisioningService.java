@@ -172,7 +172,7 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
             ));
             ItemStack[] storagePlan = deepClone(tx.previousStorageContents);
             if (previousManaged != null) {
-                removeManagedItems(storagePlan, previousManaged.managedItemIds());
+                removeManagedItems(storagePlan, previousManaged);
             }
             if (!addItemsToStorage(player.getInventory(), storagePlan, planned.items())) {
                 return LoadoutProvisionResult.rejected("Not enough storage inventory space; loadout was not granted");
@@ -180,7 +180,9 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
             player.getInventory().setStorageContents(deepClone(storagePlan));
             tx.inventoryCommitted = true;
 
-            rememberLoadout(key, new ManagedLoadout(key, planned.managedItemIds(), planned.weaponIds()));
+            rememberLoadout(key, new ManagedLoadout(
+                key, entry.token().tokenId(), planned.managedItemIds(), planned.weaponIds()
+            ));
             tx.loadoutCommitted = true;
 
             for (WeaponId weaponId : planned.weaponIds()) {
@@ -277,10 +279,10 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
 
     synchronized void reconcilePlayerInventory(Player player) {
         Objects.requireNonNull(player, "player");
-        Set<UUID> indexed = new HashSet<>();
+        Map<UUID, ManagedLoadout> indexed = new HashMap<>();
         for (ManagedLoadout managed : loadouts.values()) {
             if (managed.key().playerUuid().equals(player.getUniqueId())) {
-                indexed.addAll(managed.managedItemIds());
+                for (UUID itemId : managed.managedItemIds()) indexed.put(itemId, managed);
             }
         }
         PlayerInventory inventory = player.getInventory();
@@ -288,15 +290,10 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
         boolean changed = false;
         for (int index = 0; index < storage.length; index++) {
             ItemStack item = storage[index];
-            Optional<UUID> current = currentManagedItemId(item);
-            if (current.isPresent()) {
-                if (!indexed.contains(current.get())) {
-                    storage[index] = null;
-                    changed = true;
-                }
-                continue;
-            }
-            if (hasWarSimManagedMetadata(item)) {
+            ManagedMetadataRead metadata = readManagedMetadata(item);
+            if (metadata.status() == ManagedMetadataStatus.NOT_WARSIM_MANAGED) continue;
+            if (metadata.status() == ManagedMetadataStatus.MALFORMED
+                || shouldRemoveManagedItem(metadata.metadata(), indexed)) {
                 storage[index] = null;
                 changed = true;
             }
@@ -311,7 +308,16 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
             if (loadout.key().playerUuid().equals(player)) ids.addAll(loadout.managedItemIds());
         }
         if (ids.isEmpty()) return;
-        event.getDrops().removeIf(item -> currentManagedItemId(item).filter(ids::contains).isPresent());
+        event.getDrops().removeIf(item -> {
+            ManagedMetadataRead metadata = readManagedMetadata(item);
+            if (metadata.status() != ManagedMetadataStatus.VALID) return false;
+            if (!providerInstanceId.equals(metadata.metadata().providerInstanceId())) return false;
+            ManagedLoadout managed = loadouts.values().stream()
+                .filter(value -> value.key().playerUuid().equals(player))
+                .filter(value -> value.managedItemIds().contains(metadata.metadata().managedItemInstanceId()))
+                .findFirst().orElse(null);
+            return managed != null && metadataMatches(metadata.metadata(), managed);
+        });
     }
 
     synchronized void close() {
@@ -450,7 +456,7 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
         Player player = Bukkit.getPlayer(key.playerUuid());
         if (player != null) {
             try {
-                clearManagedItems(player, managed.managedItemIds());
+                clearManagedItems(player, managed);
             } catch (RuntimeException exception) {
                 plugin.getLogger().warning("[warsim-weapons] Managed loadout inventory cleanup failed; index was still cleared.");
             }
@@ -468,17 +474,15 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
             .map(Map.Entry::getValue)
             .toList();
         if (selected.isEmpty()) return;
-        Set<UUID> managedIds = new HashSet<>();
         for (ManagedLoadout managed : selected) {
-            managedIds.addAll(managed.managedItemIds());
             managed.weaponIds().forEach(weapon ->
                 weaponService.clearWeapon(managed.key().playerUuid(), managed.key().matchId(), weapon));
             loadouts.remove(managed.key());
             loadoutOrder.remove(managed.key());
         }
-        if (player != null && !managedIds.isEmpty()) {
+        if (player != null) {
             try {
-                clearManagedItems(player, managedIds);
+                clearManagedItems(player, selected);
             } catch (RuntimeException exception) {
                 plugin.getLogger().warning("[warsim-weapons] Managed loadout inventory cleanup failed during " + reason + "; index was still cleared.");
             }
@@ -487,16 +491,23 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
         }
     }
 
-    private void clearManagedItems(Player player, Set<UUID> managedIds) {
+    private void clearManagedItems(Player player, ManagedLoadout managed) {
+        clearManagedItems(player, List.of(managed));
+    }
+
+    private void clearManagedItems(Player player, List<ManagedLoadout> managedLoadouts) {
         PlayerInventory inventory = player.getInventory();
         ItemStack[] storage = deepClone(inventory.getStorageContents());
-        removeManagedItems(storage, managedIds);
+        for (ManagedLoadout managed : managedLoadouts) removeManagedItems(storage, managed);
         inventory.setStorageContents(storage);
     }
 
-    private void removeManagedItems(ItemStack[] storage, Set<UUID> managedIds) {
+    private void removeManagedItems(ItemStack[] storage, ManagedLoadout managed) {
         for (int index = 0; index < storage.length; index++) {
-            if (currentManagedItemId(storage[index]).filter(managedIds::contains).isPresent()) {
+            ManagedMetadataRead metadata = readManagedMetadata(storage[index]);
+            if (metadata.status() == ManagedMetadataStatus.VALID
+                && providerInstanceId.equals(metadata.metadata().providerInstanceId())
+                && metadataMatches(metadata.metadata(), managed)) {
                 storage[index] = null;
             }
         }
@@ -521,23 +532,26 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
         item.setItemMeta(meta);
     }
 
-    private Optional<UUID> currentManagedItemId(ItemStack item) {
-        if (item == null || item.getType().isAir() || !item.hasItemMeta()) return Optional.empty();
-        PersistentDataContainer pdc = item.getItemMeta().getPersistentDataContainer();
-        if (!providerInstanceId.toString().equals(pdc.get(providerKey, PersistentDataType.STRING))) {
-            return Optional.empty();
-        }
-        String value = pdc.get(itemInstanceKey, PersistentDataType.STRING);
-        if (value == null) return Optional.empty();
-        try {
-            return Optional.of(UUID.fromString(value));
-        } catch (IllegalArgumentException ignored) {
-            return Optional.empty();
-        }
+    private boolean shouldRemoveManagedItem(ManagedItemMetadata metadata, Map<UUID, ManagedLoadout> indexed) {
+        if (metadata == null) return true;
+        if (!providerInstanceId.equals(metadata.providerInstanceId())) return true;
+        ManagedLoadout managed = indexed.get(metadata.managedItemInstanceId());
+        return managed == null || !metadataMatches(metadata, managed);
     }
 
-    private boolean hasWarSimManagedMetadata(ItemStack item) {
-        if (item == null || item.getType().isAir() || !item.hasItemMeta()) return false;
+    private boolean metadataMatches(ManagedItemMetadata metadata, ManagedLoadout managed) {
+        return providerInstanceId.equals(metadata.providerInstanceId())
+            && managed.managedItemIds().contains(metadata.managedItemInstanceId())
+            && managed.key().matchId().equals(metadata.matchId())
+            && managed.key().deploymentRevision() == metadata.deploymentRevision()
+            && managed.key().lifeRevision() == metadata.lifeRevision()
+            && managed.tokenId().equals(metadata.tokenId());
+    }
+
+    private ManagedMetadataRead readManagedMetadata(ItemStack item) {
+        if (item == null || item.getType().isAir() || !item.hasItemMeta()) {
+            return ManagedMetadataRead.notManaged();
+        }
         PersistentDataContainer pdc = item.getItemMeta().getPersistentDataContainer();
         String provider = pdc.get(providerKey, PersistentDataType.STRING);
         String itemId = pdc.get(itemInstanceKey, PersistentDataType.STRING);
@@ -548,23 +562,34 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
         String weapon = pdc.get(weaponKey, PersistentDataType.STRING);
         if (provider == null && itemId == null && match == null && deployment == null
             && life == null && token == null && weapon == null) {
-            return false;
+            return ManagedMetadataRead.notManaged();
         }
-        return !validUuid(provider)
-            || !validUuid(itemId)
-            || !validUuid(match)
-            || deployment == null
-            || life == null
-            || !providerInstanceId.toString().equals(provider);
+        UUID providerUuid = parseUuid(provider).orElse(null);
+        UUID itemUuid = parseUuid(itemId).orElse(null);
+        UUID matchUuid = parseUuid(match).orElse(null);
+        UUID tokenUuid = parseUuid(token).orElse(null);
+        if (providerUuid == null || itemUuid == null || matchUuid == null
+            || tokenUuid == null || deployment == null || life == null) {
+            return ManagedMetadataRead.malformed();
+        }
+        Optional<WeaponId> weaponId;
+        try {
+            weaponId = weapon == null || weapon.isBlank()
+                ? Optional.empty() : Optional.of(new WeaponId(weapon));
+        } catch (IllegalArgumentException exception) {
+            return ManagedMetadataRead.malformed();
+        }
+        return ManagedMetadataRead.valid(new ManagedItemMetadata(
+            providerUuid, itemUuid, matchUuid, deployment, life, tokenUuid, weaponId
+        ));
     }
 
-    private static boolean validUuid(String value) {
-        if (value == null) return false;
+    private Optional<UUID> parseUuid(String value) {
+        if (value == null) return Optional.empty();
         try {
-            UUID.fromString(value);
-            return true;
+            return Optional.of(UUID.fromString(value));
         } catch (IllegalArgumentException ignored) {
-            return false;
+            return Optional.empty();
         }
     }
 
@@ -578,8 +603,9 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
 
     private record TokenEntry(LoadoutPreparationToken token, ClassEquipmentDefinition equipment) {}
     private record LifeKey(UUID playerUuid, UUID matchId, long deploymentRevision, long lifeRevision) {}
-    private record ManagedLoadout(LifeKey key, Set<UUID> managedItemIds, Set<WeaponId> weaponIds) {
+    private record ManagedLoadout(LifeKey key, UUID tokenId, Set<UUID> managedItemIds, Set<WeaponId> weaponIds) {
         ManagedLoadout {
+            Objects.requireNonNull(tokenId, "tokenId");
             managedItemIds = Set.copyOf(managedItemIds);
             weaponIds = Set.copyOf(weaponIds);
         }
@@ -621,6 +647,34 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
             this.previousLoadouts = previousLoadouts;
             this.previousLoadoutOrder = previousLoadoutOrder;
             this.previousStorageContents = previousStorageContents;
+        }
+    }
+
+    private enum ManagedMetadataStatus { NOT_WARSIM_MANAGED, VALID, MALFORMED }
+
+    private record ManagedMetadataRead(ManagedMetadataStatus status, ManagedItemMetadata metadata) {
+        private static ManagedMetadataRead notManaged() {
+            return new ManagedMetadataRead(ManagedMetadataStatus.NOT_WARSIM_MANAGED, null);
+        }
+        private static ManagedMetadataRead malformed() {
+            return new ManagedMetadataRead(ManagedMetadataStatus.MALFORMED, null);
+        }
+        private static ManagedMetadataRead valid(ManagedItemMetadata metadata) {
+            return new ManagedMetadataRead(ManagedMetadataStatus.VALID, metadata);
+        }
+    }
+
+    private record ManagedItemMetadata(
+        UUID providerInstanceId,
+        UUID managedItemInstanceId,
+        UUID matchId,
+        long deploymentRevision,
+        long lifeRevision,
+        UUID tokenId,
+        Optional<WeaponId> weaponId
+    ) {
+        ManagedItemMetadata {
+            weaponId = weaponId == null ? Optional.empty() : weaponId;
         }
     }
 }

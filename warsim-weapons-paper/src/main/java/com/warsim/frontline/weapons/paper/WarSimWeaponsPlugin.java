@@ -2,13 +2,13 @@ package com.warsim.frontline.weapons.paper;
 
 import com.warsim.frontline.admin.WarSimCommandRegistry;
 import com.warsim.frontline.api.battle.WarSimBattleRuntime;
+import com.warsim.frontline.api.classes.CombatLoadoutProvisioningService;
 import com.warsim.frontline.api.performance.PerformanceComponent;
 import com.warsim.frontline.api.performance.PerformanceContributor;
 import com.warsim.frontline.api.performance.PerformanceMetricId;
 import com.warsim.frontline.api.performance.PerformanceMetricSnapshot;
 import com.warsim.frontline.api.performance.PerformancePercentiles;
 import com.warsim.frontline.api.performance.PerformanceService;
-import com.warsim.frontline.api.classes.CombatLoadoutProvisioningService;
 import com.warsim.frontline.api.weapon.WeaponMetricsSnapshot;
 import com.warsim.frontline.api.weapon.WeaponService;
 import java.util.List;
@@ -57,7 +57,7 @@ public final class WarSimWeaponsPlugin extends JavaPlugin {
         PerformanceService performance =
             getServer().getServicesManager().load(PerformanceService.class);
         if (runtime == null || commands == null) {
-            getLogger().severe("[warsim-weapons] WarSim主插件服务不可用，武器插件无法启用。");
+            getLogger().severe("[warsim-weapons] WarSim 主插件服务不可用，武器插件无法启用。");
             getServer().getPluginManager().disablePlugin(this);
             return;
         }
@@ -85,6 +85,11 @@ public final class WarSimWeaponsPlugin extends JavaPlugin {
             org.bukkit.plugin.ServicePriority.Normal
         );
         loadoutServiceRegistered = true;
+        try {
+            coordinator.reconcileOnlinePlayers();
+        } catch (RuntimeException exception) {
+            getLogger().log(Level.WARNING, "[warsim-weapons] 启动库存托管物品校验失败。", exception);
+        }
         commandRegistration = register(commands, new WeaponCommandExtension(
             coordinator.service(), coordinator.gateway(), runtime, configuration
         ));
@@ -100,7 +105,7 @@ public final class WarSimWeaponsPlugin extends JavaPlugin {
         try {
             return registry.register(extension);
         } catch (RuntimeException exception) {
-            getLogger().log(Level.SEVERE, "[warsim-weapons] 注册/warsim weapon失败。", exception);
+            getLogger().log(Level.SEVERE, "[warsim-weapons] 注册 /warsim weapon 失败。", exception);
             getServer().getPluginManager().disablePlugin(this);
             return () -> {};
         }
