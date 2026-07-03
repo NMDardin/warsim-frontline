@@ -4,12 +4,11 @@ import com.warsim.frontline.api.classes.DeploymentTicketCosts;
 import com.warsim.frontline.api.roster.TeamSide;
 import java.util.Map;
 import java.util.Objects;
-import org.bukkit.GameMode;
 
 public record DeploymentPaperConfiguration(
     boolean enabled,
-    GameMode waitingGameMode,
-    GameMode combatGameMode,
+    String waitingGameModeName,
+    String combatGameModeName,
     int countdownSeconds,
     int safeRadius,
     int maximumSpawnCandidates,
@@ -18,9 +17,11 @@ public record DeploymentPaperConfiguration(
     Map<TeamSide, SpawnPoint> teamSpawns
 ) {
     public DeploymentPaperConfiguration {
-        Objects.requireNonNull(waitingGameMode, "waitingGameMode");
-        Objects.requireNonNull(combatGameMode, "combatGameMode");
+        Objects.requireNonNull(waitingGameModeName, "waitingGameModeName");
+        Objects.requireNonNull(combatGameModeName, "combatGameModeName");
         Objects.requireNonNull(ticketCosts, "ticketCosts");
+        waitingGameModeName = normalizeGameMode(waitingGameModeName, "waitingGameModeName");
+        combatGameModeName = normalizeGameMode(combatGameModeName, "combatGameModeName");
         teamSpawns = Map.copyOf(Objects.requireNonNull(teamSpawns, "teamSpawns"));
         if (countdownSeconds < 0 || countdownSeconds > 60) {
             throw new IllegalArgumentException("deployment countdown must be 0-60 seconds");
@@ -43,8 +44,8 @@ public record DeploymentPaperConfiguration(
     public static DeploymentPaperConfiguration disabled() {
         return new DeploymentPaperConfiguration(
             false,
-            GameMode.SPECTATOR,
-            GameMode.SURVIVAL,
+            "SPECTATOR",
+            "SURVIVAL",
             5,
             2,
             128,
@@ -52,6 +53,14 @@ public record DeploymentPaperConfiguration(
             null,
             Map.of()
         );
+    }
+
+    private static String normalizeGameMode(String value, String field) {
+        String normalized = value.strip().toUpperCase(java.util.Locale.ROOT);
+        if (!normalized.matches("[A-Z_]{1,32}")) {
+            throw new IllegalArgumentException(field + " is invalid");
+        }
+        return normalized;
     }
 
     public record SpawnPoint(

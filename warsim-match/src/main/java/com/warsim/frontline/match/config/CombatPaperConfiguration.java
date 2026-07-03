@@ -12,6 +12,7 @@ public record CombatPaperConfiguration(
     long damageCorrelationTtlNanos,
     boolean environmentalAttributionEnabled,
     long environmentalAttributionTtlNanos,
+    boolean friendlyFireEnabled,
     boolean spawnProtectionEnabled,
     long spawnProtectionDurationNanos,
     boolean blockIncomingCombatDamage,
@@ -63,6 +64,7 @@ public record CombatPaperConfiguration(
             officialBattle, officialBattle, officialBattle, officialBattle,
             8, 20.0, 0.20, seconds(10), seconds(2),
             false, seconds(3),
+            false,
             officialBattle, seconds(5), true, true, true, true, true,
             5.0, 10, 20, seconds(8), seconds(1)
         );

@@ -35,6 +35,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
@@ -144,6 +145,9 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
                 || changed.current().matchState() == MatchState.STOPPED) {
                 cancelAllDeployments("对局状态变化，部署已取消");
             }
+            if (changed.current().matchState() == MatchState.PLAYING) {
+                enterWaitingDeploymentForPlayingPlayers();
+            }
         } else if (event instanceof BattleRuntimeClosedEvent) {
             close();
         }
@@ -173,11 +177,17 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
 
     @EventHandler
     public void onDamage(EntityDamageEvent event) {
-        if (event.getEntity() instanceof Player player) {
-            service.eligibility(player.getUniqueId())
-                .filter(value -> !value.eligible())
-                .ifPresent(ignored -> event.setCancelled(true));
-        }
+        if (!(event instanceof EntityDamageByEntityEvent byEntity)
+            || !(event.getEntity() instanceof Player player)
+            || !(byEntity.getDamager() instanceof Player damager)) return;
+        var battle = matchCoordinator.snapshot();
+        if (battle.state() != MatchState.PLAYING) return;
+        if (matchCoordinator.participant(damager.getUniqueId())
+            .filter(participant -> participant.matchId().equals(battle.matchId()))
+            .isEmpty()) return;
+        service.eligibility(player.getUniqueId())
+            .filter(value -> !value.eligible())
+            .ifPresent(ignored -> event.setCancelled(true));
     }
 
     public void handleCombatDeath(Player player, long expectedLifeRevision) {
@@ -213,10 +223,36 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
                     event.setRespawnLocation(waiting);
                 }
                 if (deploymentConfiguration.enabled()) {
-                    player.setGameMode(deploymentConfiguration.waitingGameMode());
+                    matchCoordinator.assignment(player.getUniqueId()).ifPresent(assignment ->
+                        service.markWaitingDeployment(
+                            player.getUniqueId(), selection.matchId(), assignment.teamSide(), Instant.now()
+                        ));
+                    player.setGameMode(waitingGameMode());
                 }
             }
         });
+    }
+
+    private void enterWaitingDeploymentForPlayingPlayers() {
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            var assignment = matchCoordinator.assignment(player.getUniqueId());
+            if (assignment.isEmpty() || !assignment.get().connected()) continue;
+            service.selection(player.getUniqueId())
+                .filter(selection -> selection.combatState() == PlayerCombatState.NOT_DEPLOYED)
+                .ifPresent(selection -> {
+                    service.markWaitingDeployment(
+                        player.getUniqueId(), selection.matchId(), assignment.get().teamSide(), Instant.now()
+                    );
+                    if (deploymentConfiguration.enabled()) {
+                        player.setGameMode(waitingGameMode());
+                        resolveWaitingSpawn().ifPresent(player::teleport);
+                        resetLifeState(
+                            player.getUniqueId(), selection.matchId(),
+                            selection.deploymentRevision(), selection.lifeRevision(), "enter-playing"
+                        );
+                    }
+                });
+        }
     }
 
     private void tickDeployments(long nowNanos) {
@@ -229,6 +265,7 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
 
     private void completeDeployment(Player player, DeploymentContext context, long nowNanos) {
         DeploymentContext staged = context.stage(DeploymentTransactionStage.VALIDATED);
+        boolean[] rolledBack = {false};
         try {
             if (!revalidate(player, staged)) return;
             CombatLoadoutProvisioningService provider = provider();
@@ -282,8 +319,10 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
             try {
                 resetLifeState(player.getUniqueId(), staged.matchId(), staged.deploymentRevision(),
                     staged.proposedLifeRevision(), "before-grant");
-                player.teleport(spawn);
-                player.setGameMode(deploymentConfiguration.combatGameMode());
+                if (!player.teleport(spawn)) {
+                    throw new IllegalStateException("teleport failed");
+                }
+                player.setGameMode(combatGameMode());
                 staged = staged.stage(DeploymentTransactionStage.TELEPORTED);
                 LoadoutProvisionResult granted = provider.grantPreparedLoadout(prepared.token());
                 if (!granted.successful()) {
@@ -304,12 +343,12 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
                 player.sendMessage("§a已部署为 " + staged.requestedClass().value());
             } finally {
                 if (!committed && charge.change() != null) {
-                    rollbackAfterCharge(player, staged, charge.change().operationId(), provider);
+                    rollbackAfterChargeOnce(player, staged, charge.change().operationId(), provider, rolledBack);
                 }
             }
         } catch (RuntimeException exception) {
             plugin.getLogger().log(Level.SEVERE, "[warsim-classes] 部署事务失败", exception);
-            rollbackAfterCharge(player, staged, chargeOperationId(staged), provider());
+            rollbackAfterChargeOnce(player, staged, chargeOperationId(staged), provider(), rolledBack);
             failContext(player, staged, DeploymentFailureReason.INTERNAL_ERROR,
                 "部署失败，已回到等待部署状态");
         }
@@ -324,6 +363,7 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
         var registration = plugin.getServer().getServicesManager()
             .getRegistration(SpawnProtectionService.class);
         if (registration == null || spawn.getWorld() == null) return;
+        long duration = registration.getProvider().protectionDurationNanos();
         registration.getProvider().create(new SpawnProtectionSnapshot(
             player.getUniqueId(),
             context.matchId(),
@@ -332,7 +372,7 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
             context.deploymentRevision(),
             context.spawnId(),
             nowNanos,
-            nowNanos + 5_000_000_000L,
+            nowNanos + duration,
             new SpawnPositionSnapshot(
                 spawn.getWorld().getName(),
                 spawn.getX(),
@@ -340,6 +380,14 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
                 spawn.getZ()
             )
         ));
+    }
+
+    private GameMode waitingGameMode() {
+        return GameMode.valueOf(deploymentConfiguration.waitingGameModeName());
+    }
+
+    private GameMode combatGameMode() {
+        return GameMode.valueOf(deploymentConfiguration.combatGameModeName());
     }
 
     private boolean revalidate(Player player, DeploymentContext context) {
@@ -414,9 +462,18 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
                 provider.providerInstanceId(), "deployment-rollback"
             ));
         }
-        player.setGameMode(deploymentConfiguration.waitingGameMode());
+        player.setGameMode(waitingGameMode());
         resolveWaitingSpawn().ifPresent(player::teleport);
         service.cancelDeployment(player.getUniqueId(), "部署失败，已回滚", Instant.now());
+    }
+
+    private void rollbackAfterChargeOnce(
+        Player player, DeploymentContext context, UUID chargeId,
+        CombatLoadoutProvisioningService provider, boolean[] rolledBack
+    ) {
+        if (rolledBack[0]) return;
+        rolledBack[0] = true;
+        rollbackAfterCharge(player, context, chargeId, provider);
     }
 
     private void failContext(
@@ -759,6 +816,13 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
             return;
         }
         var selection = service.selection(player.getUniqueId());
+        if (selection.isPresent()
+            && (selection.get().combatState() == PlayerCombatState.ALIVE
+                || selection.get().combatState() == PlayerCombatState.DEPLOYING
+                || selection.get().combatState() == PlayerCombatState.CLOSED)) {
+            player.sendMessage("搂c褰撳墠鐘舵€佷笉鑳介儴缃层€?");
+            return;
+        }
         CombatClassId requested = selection.flatMap(PlayerClassSelection::pendingClass)
             .or(() -> selection.flatMap(PlayerClassSelection::currentClass))
             .orElse(null);
@@ -788,7 +852,7 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
             }
             resetLifeState(target.getUniqueId(), selection.get().matchId(),
                 selection.get().deploymentRevision(), selection.get().lifeRevision(), "class-clear");
-            target.setGameMode(deploymentConfiguration.waitingGameMode());
+            target.setGameMode(waitingGameMode());
             target.teleport(waiting);
         }
         DeploymentResult result = service.clearClass(

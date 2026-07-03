@@ -7,5 +7,7 @@ public interface PlayerFeedbackService {
 
     void clear(UUID playerUuid);
 
+    void clear(UUID playerUuid, FeedbackChannel channel);
+
     void clearMatch(UUID matchId);
 }

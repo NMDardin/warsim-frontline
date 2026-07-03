@@ -51,7 +51,7 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
         this.gateway = new CraftEngineWeaponGateway(service.definitions());
         this.loadoutProvider = new WeaponLoadoutProvisioningService(plugin, service, gateway);
         this.sampler = new PaperTargetSampler(runtime, configuration.core(), service);
-        this.damage = new PaperDamageAdapter(runtime, attribution, service);
+        this.damage = new PaperDamageAdapter(plugin, runtime, attribution, service);
         this.runtimeSubscription = runtime.subscribe(this);
         plugin.getServer().getPluginManager().registerEvents(this, plugin);
     }
@@ -162,8 +162,9 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
             new ShotContext(request, candidates, blockDistance),
             target -> runtime.relation(shooter.getUniqueId(), target)
         );
-        if (result.requestedDamage() > 0) damage.apply(result);
-        shotFeedback(shooter, result);
+        DamageApplicationResult damageResult = result.requestedDamage() > 0
+            ? damage.apply(result) : DamageApplicationResult.NOT_APPLICABLE;
+        shotFeedback(shooter, result, damageResult);
         updateDisplay(shooter, weaponId);
         shooter.getWorld().playSound(
             shooter.getLocation(), Sound.ENTITY_FIREWORK_ROCKET_BLAST,
@@ -203,6 +204,11 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
             || !(event.getEntity() instanceof Player target)
             || gateway.identify(shooter.getInventory().getItemInMainHand()).isEmpty()) return;
         if (!damage.isApplying(shooter, target)) event.setCancelled(true);
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = false)
+    public void onWeaponDamageMonitor(EntityDamageByEntityEvent event) {
+        damage.handleDamageEvent(event);
     }
 
     @EventHandler
@@ -316,9 +322,15 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
     }
 
     private void shotFeedback(Player player, ShotResult result) {
+        shotFeedback(player, result, DamageApplicationResult.APPLIED);
+    }
+
+    private void shotFeedback(Player player, ShotResult result, DamageApplicationResult damageResult) {
         String message = switch (result.outcome()) {
-            case FIRED_BODY_HIT -> "§f命中";
-            case FIRED_HEAD_HIT -> "§e爆头命中";
+            case FIRED_BODY_HIT -> damageResult == DamageApplicationResult.APPLIED
+                ? "§f命中" : damageBlockedMessage(damageResult);
+            case FIRED_HEAD_HIT -> damageResult == DamageApplicationResult.APPLIED
+                ? "§e爆头命中" : damageBlockedMessage(damageResult);
             case FRIENDLY_BLOCKED -> "§e友军伤害已阻止";
             case REJECTED_EMPTY -> "§c弹匣为空，按Q装填";
             case REJECTED_INTERNAL_ERROR -> "§c射击处理失败";
@@ -330,6 +342,17 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
                 .map(BattlePlayerSnapshot::lifeRevision).orElse(0L)))) {
             feedback.shot(player, result);
         }
+    }
+
+    private String damageBlockedMessage(DamageApplicationResult result) {
+        return switch (result) {
+            case BLOCKED_BY_SPAWN_PROTECTION -> "§e目标处于出生保护中";
+            case CANCELLED_BY_EVENT -> "§e伤害已被服务器拦截";
+            case NO_EFFECTIVE_DAMAGE -> "§e未造成有效伤害";
+            case STALE_CONTEXT, TARGET_INVALID -> "§e目标状态已改变";
+            case INTERNAL_FAILURE -> "§c伤害应用失败";
+            default -> null;
+        };
     }
 
     private void notice(Player player, String text) {
@@ -376,7 +399,7 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
         feedback.clear(playerUuid);
         RegisteredServiceProvider<PlayerFeedbackService> registration =
             Bukkit.getServicesManager().getRegistration(PlayerFeedbackService.class);
-        if (registration != null) registration.getProvider().clear(playerUuid);
+        if (registration != null) registration.getProvider().clear(playerUuid, FeedbackChannel.WEAPON);
     }
 
     private void clearAllFeedback() {
@@ -384,7 +407,7 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
         for (Player player : Bukkit.getOnlinePlayers()) {
             RegisteredServiceProvider<PlayerFeedbackService> registration =
                 Bukkit.getServicesManager().getRegistration(PlayerFeedbackService.class);
-            if (registration != null) registration.getProvider().clear(player.getUniqueId());
+            if (registration != null) registration.getProvider().clear(player.getUniqueId(), FeedbackChannel.WEAPON);
         }
     }
 

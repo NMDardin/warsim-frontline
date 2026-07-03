@@ -1,6 +1,7 @@
 package com.warsim.frontline.api.combat;
 
 import com.warsim.frontline.api.weapon.WeaponId;
+import java.util.Optional;
 import java.util.UUID;
 
 public record DamageCorrelationToken(
@@ -11,7 +12,7 @@ public record DamageCorrelationToken(
     long targetLifeRevision,
     UUID matchId,
     long lifecycleRevision,
-    WeaponId weaponId,
+    Optional<WeaponId> weaponId,
     boolean headshot,
     double distance,
     boolean friendly,
@@ -20,9 +21,10 @@ public record DamageCorrelationToken(
 ) {
     public DamageCorrelationToken {
         if (correlationId == null || attackerUuid == null || targetUuid == null
-            || matchId == null || weaponId == null) {
+            || matchId == null) {
             throw new IllegalArgumentException("Damage correlation identity is required");
         }
+        weaponId = weaponId == null ? Optional.empty() : weaponId;
         if (attackerLifeRevision < 0 || targetLifeRevision < 0 || lifecycleRevision < 0) {
             throw new IllegalArgumentException("Revisions must be non-negative");
         }

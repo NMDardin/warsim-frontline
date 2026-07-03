@@ -4,68 +4,76 @@ import com.warsim.frontline.api.battle.WarSimBattleRuntime;
 import com.warsim.frontline.api.combat.CombatOutcomeService;
 import com.warsim.frontline.api.combat.DamageCorrelationRequest;
 import com.warsim.frontline.api.combat.DamageCorrelationResult;
+import com.warsim.frontline.api.combat.DamageCorrelationToken;
 import com.warsim.frontline.api.combat.SpawnProtectionService;
 import com.warsim.frontline.api.match.MatchState;
 import com.warsim.frontline.api.weapon.HitZone;
 import com.warsim.frontline.api.weapon.ShotResult;
 import com.warsim.frontline.weapons.DefaultWeaponService;
+import java.util.ArrayDeque;
+import java.util.Iterator;
+import java.util.Optional;
 import java.util.UUID;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.metadata.FixedMetadataValue;
 import org.bukkit.plugin.RegisteredServiceProvider;
 
 final class PaperDamageAdapter {
+    static final String WEAPON_DAMAGE_METADATA = "warsim_weapon_damage";
+    static final String WEAPON_DAMAGE_CALL_METADATA = "warsim_weapon_damage_call";
+    private static final int MAX_PENDING_APPLICATIONS = 64;
+
+    private final WarSimWeaponsPlugin plugin;
     private final WarSimBattleRuntime runtime;
     private final DamageAttributionRegistry attribution;
     private final DefaultWeaponService service;
-    private boolean applying;
-    private UUID applyingShooter;
-    private UUID applyingTarget;
+    private final ArrayDeque<PendingDamageApplication> pendingApplications = new ArrayDeque<>();
 
     PaperDamageAdapter(
-        WarSimBattleRuntime runtime, DamageAttributionRegistry attribution,
+        WarSimWeaponsPlugin plugin,
+        WarSimBattleRuntime runtime,
+        DamageAttributionRegistry attribution,
         DefaultWeaponService service
     ) {
+        this.plugin = plugin;
         this.runtime = runtime;
         this.attribution = attribution;
         this.service = service;
     }
 
-    boolean apply(ShotResult result) {
-        if (!result.hit().hit() || result.requestedDamage() <= 0) return false;
+    DamageApplicationResult apply(ShotResult result) {
+        if (!result.hit().hit() || result.requestedDamage() <= 0) return DamageApplicationResult.NOT_APPLICABLE;
         var battle = runtime.snapshot();
         if (!battle.available()
             || battle.matchState() != MatchState.PLAYING
             || !battle.matchId().equals(result.request().matchId())
             || battle.lifecycleRevision() != result.request().lifecycleRevision()) {
             service.recordStaleShot();
-            return false;
+            return DamageApplicationResult.STALE_CONTEXT;
         }
         Player shooter = Bukkit.getPlayer(result.request().shooterUuid());
         Player target = Bukkit.getPlayer(result.hit().targetUuid());
-        if (shooter == null || target == null || target.isDead()) return false;
+        if (shooter == null || target == null || target.isDead()) return DamageApplicationResult.TARGET_INVALID;
         var shooterSnapshot = runtime.player(shooter.getUniqueId());
         var targetSnapshot = runtime.player(target.getUniqueId());
         if (shooterSnapshot.filter(value -> value.activeFor(battle.matchId())).isEmpty()
             || targetSnapshot.filter(value -> value.activeFor(battle.matchId())).isEmpty()) {
             service.recordStaleShot();
-            return false;
+            return DamageApplicationResult.STALE_CONTEXT;
         }
         long now = System.nanoTime();
-        spawnProtectionService().ifPresent(spawn -> {
-            if (shooterSnapshot.isPresent()) {
-                spawn.removeOnAttack(shooter.getUniqueId(), battle.matchId(),
-                    shooterSnapshot.get().lifeRevision());
-            }
-        });
-        if (targetSnapshot.isPresent() && spawnProtectionService()
+        spawnProtectionService().ifPresent(spawn ->
+            spawn.removeOnAttack(shooter.getUniqueId(), battle.matchId(), shooterSnapshot.get().lifeRevision()));
+        if (spawnProtectionService()
             .filter(spawn -> spawn.shouldBlockIncomingCombatDamage(
                 target.getUniqueId(), battle.matchId(), targetSnapshot.get().lifeRevision()
             )).isPresent()) {
-            return false;
+            return DamageApplicationResult.BLOCKED_BY_SPAWN_PROTECTION;
         }
-        double before = survivability(target);
-        DamageCorrelationResult correlation = combatOutcomeService()
+        Optional<CombatOutcomeService> combatService = combatOutcomeService();
+        DamageCorrelationResult correlation = combatService
             .map(combat -> combat.beginDamageCorrelation(new DamageCorrelationRequest(
                 shooter.getUniqueId(),
                 shooterSnapshot.get().lifeRevision(),
@@ -73,56 +81,103 @@ final class PaperDamageAdapter {
                 targetSnapshot.get().lifeRevision(),
                 battle.matchId(),
                 battle.lifecycleRevision(),
-                result.request().weaponId(),
+                Optional.of(result.request().weaponId()),
                 result.hit().hitZone() == HitZone.HEAD,
                 result.hit().distance(),
                 false,
                 now,
-                2_000_000_000L
+                combat.damageCorrelationTtlNanos()
             ))).orElse(DamageCorrelationResult.rejected("Combat service unavailable"));
-        applying = true;
-        applyingShooter = shooter.getUniqueId();
-        applyingTarget = target.getUniqueId();
-        try {
-            target.damage(result.requestedDamage(), shooter);
-        } finally {
-            applying = false;
-            applyingShooter = null;
-            applyingTarget = null;
-        }
-        double effectiveDamage = Math.min(
-            Math.min(before, result.requestedDamage()),
-            Math.max(0.0, before - survivability(target))
+        PendingDamageApplication pending = new PendingDamageApplication(
+            shooter.getUniqueId(),
+            target.getUniqueId(),
+            battle.matchId(),
+            battle.lifecycleRevision(),
+            shooterSnapshot.get().lifeRevision(),
+            targetSnapshot.get().lifeRevision(),
+            result.requestedDamage(),
+            survivability(target),
+            correlation.successful() ? Optional.of(correlation.token()) : Optional.empty()
         );
-        if (effectiveDamage <= 0) {
-            if (correlation.successful()) {
-                combatOutcomeService().ifPresent(combat ->
-                    combat.cancelDamageCorrelation(correlation.token().correlationId(), "no-effective-damage", System.nanoTime())
-                );
-            }
-            return false;
+        pendingApplications.addLast(pending);
+        while (pendingApplications.size() > MAX_PENDING_APPLICATIONS) {
+            PendingDamageApplication stale = pendingApplications.removeFirst();
+            stale.cancel(combatOutcomeService(), "pending-overflow");
         }
-        if (correlation.successful()) {
-            combatOutcomeService().ifPresent(combat ->
-                combat.completeDamageCorrelation(correlation.token().correlationId(), effectiveDamage, System.nanoTime())
-            );
+        try {
+            shooter.setMetadata(WEAPON_DAMAGE_CALL_METADATA, new FixedMetadataValue(plugin, pending.matchId.toString()));
+            target.setMetadata(WEAPON_DAMAGE_CALL_METADATA, new FixedMetadataValue(plugin, pending.matchId.toString()));
+            target.damage(result.requestedDamage(), shooter);
+        } catch (RuntimeException exception) {
+            pending.cancel(combatOutcomeService(), "damage-api-exception");
+            throw exception;
+        } finally {
+            shooter.removeMetadata(WEAPON_DAMAGE_CALL_METADATA, plugin);
+            target.removeMetadata(WEAPON_DAMAGE_CALL_METADATA, plugin);
+            pendingApplications.remove(pending);
         }
-        service.recordDamageApplied(result);
-        return true;
+        if (!pending.completed && !pending.cancelled) {
+            pending.cancel(combatOutcomeService(), "no-matching-damage-event");
+            return DamageApplicationResult.NO_EFFECTIVE_DAMAGE;
+        }
+        if (pending.result == DamageApplicationResult.APPLIED) {
+            service.recordDamageApplied(result);
+        }
+        return pending.result;
     }
 
-    private java.util.Optional<CombatOutcomeService> combatOutcomeService() {
+    void handleDamageEvent(EntityDamageByEntityEvent event) {
+        if (!(event.getDamager() instanceof Player shooter)
+            || !(event.getEntity() instanceof Player target)) return;
+        PendingDamageApplication pending = matching(shooter, target);
+        if (pending == null) return;
+        if (event.isCancelled()) {
+            pending.cancel(combatOutcomeService(), "event-cancelled");
+            pending.result = DamageApplicationResult.CANCELLED_BY_EVENT;
+            return;
+        }
+        double finalDamage = event.getFinalDamage();
+        double effectiveDamage = Math.min(Math.min(pending.beforeSurvivability, finalDamage), pending.requestedDamage);
+        if (!Double.isFinite(effectiveDamage) || effectiveDamage <= 0.0) {
+            pending.cancel(combatOutcomeService(), "zero-final-damage");
+            pending.result = DamageApplicationResult.NO_EFFECTIVE_DAMAGE;
+            return;
+        }
+        Optional<CombatOutcomeService> combat = combatOutcomeService();
+        if (pending.token.isPresent() && combat.isPresent()
+            && combat.get().completeDamageCorrelation(
+                pending.token.get().correlationId(),
+                effectiveDamage,
+                System.nanoTime()
+            )) {
+            pending.completed = true;
+            pending.result = DamageApplicationResult.APPLIED;
+        } else {
+            pending.cancel(combat, "correlation-complete-failed");
+            pending.result = DamageApplicationResult.STALE_CONTEXT;
+        }
+    }
+
+    private PendingDamageApplication matching(Player shooter, Player target) {
+        for (Iterator<PendingDamageApplication> iterator = pendingApplications.descendingIterator(); iterator.hasNext();) {
+            PendingDamageApplication pending = iterator.next();
+            if (pending.shooterUuid.equals(shooter.getUniqueId()) && pending.targetUuid.equals(target.getUniqueId())) {
+                return pending;
+            }
+        }
+        return null;
+    }
+
+    private Optional<CombatOutcomeService> combatOutcomeService() {
         RegisteredServiceProvider<CombatOutcomeService> registration =
             Bukkit.getServicesManager().getRegistration(CombatOutcomeService.class);
-        return registration == null ? java.util.Optional.empty()
-            : java.util.Optional.of(registration.getProvider());
+        return registration == null ? Optional.empty() : Optional.of(registration.getProvider());
     }
 
-    private java.util.Optional<SpawnProtectionService> spawnProtectionService() {
+    private Optional<SpawnProtectionService> spawnProtectionService() {
         RegisteredServiceProvider<SpawnProtectionService> registration =
             Bukkit.getServicesManager().getRegistration(SpawnProtectionService.class);
-        return registration == null ? java.util.Optional.empty()
-            : java.util.Optional.of(registration.getProvider());
+        return registration == null ? Optional.empty() : Optional.of(registration.getProvider());
     }
 
     private static double survivability(Player player) {
@@ -136,8 +191,52 @@ final class PaperDamageAdapter {
     }
 
     boolean isApplying(Player shooter, Player target) {
-        return applying
-            && shooter.getUniqueId().equals(applyingShooter)
-            && target.getUniqueId().equals(applyingTarget);
+        return matching(shooter, target) != null;
+    }
+
+    private static final class PendingDamageApplication {
+        private final UUID shooterUuid;
+        private final UUID targetUuid;
+        private final UUID matchId;
+        private final long lifecycleRevision;
+        private final long shooterLifeRevision;
+        private final long targetLifeRevision;
+        private final double requestedDamage;
+        private final double beforeSurvivability;
+        private final Optional<DamageCorrelationToken> token;
+        private boolean completed;
+        private boolean cancelled;
+        private DamageApplicationResult result = DamageApplicationResult.INTERNAL_FAILURE;
+
+        private PendingDamageApplication(
+            UUID shooterUuid,
+            UUID targetUuid,
+            UUID matchId,
+            long lifecycleRevision,
+            long shooterLifeRevision,
+            long targetLifeRevision,
+            double requestedDamage,
+            double beforeSurvivability,
+            Optional<DamageCorrelationToken> token
+        ) {
+            this.shooterUuid = shooterUuid;
+            this.targetUuid = targetUuid;
+            this.matchId = matchId;
+            this.lifecycleRevision = lifecycleRevision;
+            this.shooterLifeRevision = shooterLifeRevision;
+            this.targetLifeRevision = targetLifeRevision;
+            this.requestedDamage = requestedDamage;
+            this.beforeSurvivability = beforeSurvivability;
+            this.token = token;
+        }
+
+        private void cancel(Optional<CombatOutcomeService> combat, String reason) {
+            if (completed || cancelled) return;
+            cancelled = true;
+            result = result == DamageApplicationResult.INTERNAL_FAILURE
+                ? DamageApplicationResult.CANCELLED_BY_EVENT : result;
+            token.ifPresent(value -> combat.ifPresent(service ->
+                service.cancelDamageCorrelation(value.correlationId(), reason, System.nanoTime())));
+        }
     }
 }

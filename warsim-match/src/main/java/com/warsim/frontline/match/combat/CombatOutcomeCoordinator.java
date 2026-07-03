@@ -55,11 +55,14 @@ public final class CombatOutcomeCoordinator implements
     private final Map<UUID, MutableStats> statistics = new LinkedHashMap<>();
     private final LinkedHashMap<UUID, PendingCorrelation> correlations = new LinkedHashMap<>();
     private final Map<TargetLifeKey, List<MutableContribution>> contributions = new LinkedHashMap<>();
-    private final Map<TargetLifeKey, CombatDamageSource> lastEffectiveDamage = new LinkedHashMap<>();
+    private final Map<TargetLifeKey, TimedDamageSource> lastEffectiveDamage = new LinkedHashMap<>();
     private final LinkedHashSet<TargetLifeKey> processedDeaths = new LinkedHashSet<>();
     private final Map<UUID, SpawnProtectionSnapshot> protections = new LinkedHashMap<>();
     private final Map<UUID, EnumMap<FeedbackChannel, FeedbackState>> feedback = new LinkedHashMap<>();
+    private final Map<UUID, RenderedFeedback> renderedFeedback = new LinkedHashMap<>();
     private final Map<UUID, HudContext> hud = new LinkedHashMap<>();
+    private final Set<UUID> hudDisabled = new HashSet<>();
+    private final Set<UUID> killFeedDisabled = new HashSet<>();
     private final Map<UUID, Long> killFeedLastSent = new LinkedHashMap<>();
     private final ArrayDeque<KillFeedEntry> killFeed = new ArrayDeque<>();
     private final Metrics metrics = new Metrics();
@@ -115,7 +118,7 @@ public final class CombatOutcomeCoordinator implements
             || !target.get().activeFor(request.matchId())
             || attacker.get().lifeRevision() != request.attackerLifeRevision()
             || target.get().lifeRevision() != request.targetLifeRevision()
-            || request.friendly()) {
+            || request.friendly() && !configuration.friendlyFireEnabled()) {
             return DamageCorrelationResult.rejected("Invalid or friendly damage correlation");
         }
         if (shouldBlockIncomingCombatDamage(
@@ -181,6 +184,11 @@ public final class CombatOutcomeCoordinator implements
     }
 
     @Override
+    public long damageCorrelationTtlNanos() {
+        return configuration.damageCorrelationTtlNanos();
+    }
+
+    @Override
     public synchronized Optional<PlayerCombatStatistics> statistics(UUID playerUuid) {
         MutableStats stats = statistics.get(playerUuid);
         return stats == null ? Optional.empty() : Optional.of(stats.snapshot());
@@ -208,6 +216,7 @@ public final class CombatOutcomeCoordinator implements
         clearContributionsFor(playerUuid);
         killFeedLastSent.remove(playerUuid);
         feedback.remove(playerUuid);
+        renderedFeedback.remove(playerUuid);
         metrics.combatStateCleanupCount.incrementAndGet();
     }
 
@@ -262,6 +271,11 @@ public final class CombatOutcomeCoordinator implements
     }
 
     @Override
+    public long protectionDurationNanos() {
+        return configuration.spawnProtectionDurationNanos();
+    }
+
+    @Override
     public synchronized boolean submit(FeedbackMessage message) {
         if (closed || !configuration.feedbackEnabled()) return false;
         var player = runtime.player(message.playerUuid());
@@ -281,13 +295,31 @@ public final class CombatOutcomeCoordinator implements
     @Override
     public synchronized void clear(UUID playerUuid) {
         feedback.remove(playerUuid);
+        renderedFeedback.remove(playerUuid);
+    }
+
+    @Override
+    public synchronized void clear(UUID playerUuid, FeedbackChannel channel) {
+        EnumMap<FeedbackChannel, FeedbackState> channels = feedback.get(playerUuid);
+        if (channels != null) {
+            channels.remove(channel);
+            if (channels.isEmpty()) feedback.remove(playerUuid);
+        }
+        RenderedFeedback rendered = renderedFeedback.get(playerUuid);
+        if (rendered != null && rendered.channel == channel) {
+            renderedFeedback.remove(playerUuid);
+        }
+    }
+
+    private synchronized void closeHud(UUID playerUuid) {
         HudContext context = hud.remove(playerUuid);
         if (context != null) context.close();
     }
 
     @Override
     public synchronized void clearMatch(UUID matchId) {
-        feedback.entrySet().removeIf(entry -> true);
+        feedback.clear();
+        renderedFeedback.clear();
         for (HudContext context : hud.values()) context.close();
         hud.clear();
     }
@@ -317,6 +349,7 @@ public final class CombatOutcomeCoordinator implements
     public void onCombatDamage(EntityDamageByEntityEvent event) {
         if (!(event.getEntity() instanceof Player target)
             || !(event.getDamager() instanceof Player attacker)) return;
+        if (isWeaponDamageCall(event)) return;
         BattleRuntimeSnapshot battle = runtime.snapshot();
         if (!battle.available() || battle.matchState() != MatchState.PLAYING) return;
         var attackerSnapshot = runtime.player(attacker.getUniqueId());
@@ -324,6 +357,15 @@ public final class CombatOutcomeCoordinator implements
         if (attackerSnapshot.isEmpty() || targetSnapshot.isEmpty()
             || !attackerSnapshot.get().activeFor(battle.matchId())
             || !targetSnapshot.get().activeFor(battle.matchId())) return;
+        CombatRelation relation = runtime.relation(attacker.getUniqueId(), target.getUniqueId());
+        boolean friendly = relation == CombatRelation.SELF
+            || relation == CombatRelation.SQUADMATE
+            || relation == CombatRelation.TEAMMATE
+            || relation == CombatRelation.UNKNOWN;
+        if (friendly && !configuration.friendlyFireEnabled()) {
+            event.setCancelled(true);
+            return;
+        }
         if (configuration.removeOnMeleeAttack()) {
             remove(attacker.getUniqueId(), battle.matchId(), attackerSnapshot.get().lifeRevision(),
                 SpawnProtectionRemovalReason.MELEE_ATTACK);
@@ -336,6 +378,53 @@ public final class CombatOutcomeCoordinator implements
         }
     }
 
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = false)
+    public void onMeleeDamageResolved(EntityDamageByEntityEvent event) {
+        if (!(event.getEntity() instanceof Player target)
+            || !(event.getDamager() instanceof Player attacker)
+            || isWeaponDamageCall(event)) return;
+        if (event.isCancelled() || event.getFinalDamage() <= 0) return;
+        BattleRuntimeSnapshot battle = runtime.snapshot();
+        if (!battle.available() || battle.matchState() != MatchState.PLAYING) return;
+        var attackerSnapshot = runtime.player(attacker.getUniqueId());
+        var targetSnapshot = runtime.player(target.getUniqueId());
+        if (attackerSnapshot.isEmpty() || targetSnapshot.isEmpty()
+            || !attackerSnapshot.get().activeFor(battle.matchId())
+            || !targetSnapshot.get().activeFor(battle.matchId())) return;
+        CombatRelation relation = runtime.relation(attacker.getUniqueId(), target.getUniqueId());
+        boolean friendly = relation == CombatRelation.SELF
+            || relation == CombatRelation.SQUADMATE
+            || relation == CombatRelation.TEAMMATE
+            || relation == CombatRelation.UNKNOWN;
+        if (friendly && !configuration.friendlyFireEnabled()) return;
+        double before = Math.max(0.0, target.getHealth());
+        double effective = Math.min(event.getFinalDamage(), before);
+        if (effective <= 0) return;
+        long now = System.nanoTime();
+        DamageCorrelationResult correlation = beginDamageCorrelation(new DamageCorrelationRequest(
+            attacker.getUniqueId(),
+            attackerSnapshot.get().lifeRevision(),
+            target.getUniqueId(),
+            targetSnapshot.get().lifeRevision(),
+            battle.matchId(),
+            battle.lifecycleRevision(),
+            Optional.empty(),
+            false,
+            attacker.getLocation().distance(target.getLocation()),
+            friendly,
+            now,
+            configuration.damageCorrelationTtlNanos()
+        ));
+        if (correlation.successful()) {
+            completeDamageCorrelation(correlation.token().correlationId(), effective, now);
+        }
+    }
+
+    private boolean isWeaponDamageCall(EntityDamageByEntityEvent event) {
+        return event.getEntity().hasMetadata("warsim_weapon_damage_call")
+            || event.getDamager().hasMetadata("warsim_weapon_damage_call");
+    }
+
     @EventHandler(priority = EventPriority.MONITOR)
     public void onDeath(PlayerDeathEvent event) {
         processDeath(event.getPlayer(), event.getEntity().getLastDamageCause(), Instant.now(), System.nanoTime());
@@ -346,6 +435,9 @@ public final class CombatOutcomeCoordinator implements
         UUID uuid = event.getPlayer().getUniqueId();
         synchronized (this) {
             feedback.remove(uuid);
+            renderedFeedback.remove(uuid);
+            hudDisabled.remove(uuid);
+            killFeedDisabled.remove(uuid);
             HudContext context = hud.remove(uuid);
             if (context != null) context.close();
         }
@@ -397,7 +489,7 @@ public final class CombatOutcomeCoordinator implements
         long nowNanos
     ) {
         TargetLifeKey key = new TargetLifeKey(battle.matchId(), victim.getUniqueId(), victimSnapshot.lifeRevision());
-        CombatDamageSource source = lastEffectiveDamage.get(key);
+        CombatDamageSource source = effectiveSource(key, cause, nowNanos);
         CombatKillClassification classification = classify(victim.getUniqueId(), source, cause);
         List<CombatAssistRecord> assists = assists(key, source, nowNanos);
         MutableStats victimStats = stats(victim.getUniqueId(), battle.matchId());
@@ -414,9 +506,12 @@ public final class CombatOutcomeCoordinator implements
         }
         sourceAsKiller(source, victim.getUniqueId()).ifPresent(killer -> {
             MutableStats killerStats = stats(killer.attackerUuid(), battle.matchId());
-            killerStats.kills++;
-            killerStats.currentKillStreak++;
-            killerStats.highestKillStreak = Math.max(killerStats.highestKillStreak, killerStats.currentKillStreak);
+            if (classification != CombatKillClassification.TEAM_KILL) {
+                killerStats.kills++;
+                killerStats.currentKillStreak++;
+                killerStats.highestKillStreak = Math.max(killerStats.highestKillStreak, killerStats.currentKillStreak);
+                metrics.killsRecorded.incrementAndGet();
+            }
             killerStats.longestKillDistance = Math.max(killerStats.longestKillDistance, killer.distance());
             if (killer.headshot()) {
                 killerStats.headshotKills++;
@@ -426,7 +521,6 @@ public final class CombatOutcomeCoordinator implements
                 killerStats.teamKills++;
                 metrics.teamKills.incrementAndGet();
             }
-            metrics.killsRecorded.incrementAndGet();
         });
         for (CombatAssistRecord assist : assists) {
             MutableStats assistStats = stats(assist.assisterUuid(), battle.matchId());
@@ -448,18 +542,25 @@ public final class CombatOutcomeCoordinator implements
         MutableStats target = stats(token.targetUuid(), token.matchId());
         attacker.damageDealt += damage;
         target.damageReceived += damage;
+        CombatDamageType type = token.weaponId().isPresent()
+            ? CombatDamageType.WEAPON : CombatDamageType.MELEE;
         CombatDamageSource source = new CombatDamageSource(
-            token.attackerUuid(), token.attackerLifeRevision(), CombatDamageType.WEAPON,
-            Optional.of(token.weaponId()), token.headshot(), token.friendly(), token.distance()
+            token.attackerUuid(), token.attackerLifeRevision(), type,
+            token.weaponId(), token.headshot(), token.friendly(), token.distance()
         );
-        lastEffectiveDamage.put(key, source);
+        lastEffectiveDamage.put(key, new TimedDamageSource(
+            source,
+            nowNanos,
+            nowNanos + configuration.attributionTtlNanos(),
+            nowNanos + configuration.environmentalAttributionTtlNanos()
+        ));
         List<MutableContribution> list = contributions.computeIfAbsent(key, ignored -> new ArrayList<>());
         MutableContribution existing = list.stream()
             .filter(value -> value.attackerUuid.equals(token.attackerUuid()))
             .findFirst().orElse(null);
         if (existing == null) {
             existing = new MutableContribution(token.attackerUuid(), token.attackerLifeRevision(),
-                token.weaponId(), CombatDamageType.WEAPON, token.friendly());
+                token.weaponId(), type, token.friendly());
             list.add(existing);
         }
         existing.accumulatedDamage += damage;
@@ -472,6 +573,11 @@ public final class CombatOutcomeCoordinator implements
 
     private List<CombatAssistRecord> assists(TargetLifeKey key, CombatDamageSource killer, long nowNanos) {
         List<MutableContribution> list = contributions.getOrDefault(key, List.of());
+        list.removeIf(value -> value.expiryAtMonotonic < nowNanos
+            || runtime.player(value.attackerUuid)
+                .filter(player -> player.activeFor(key.matchId)
+                    && player.lifeRevision() == value.attackerLifeRevision)
+                .isEmpty());
         double total = list.stream()
             .filter(value -> value.expiryAtMonotonic >= nowNanos)
             .mapToDouble(value -> value.accumulatedDamage).sum();
@@ -481,6 +587,7 @@ public final class CombatOutcomeCoordinator implements
                 || contribution.friendly
                 || contribution.attackerUuid.equals(key.targetUuid)
                 || killer != null && contribution.attackerUuid.equals(killer.attackerUuid())
+                || !isEnemyContribution(contribution.attackerUuid, key.targetUuid)
                 || contribution.accumulatedDamage < configuration.assistMinimumDamage()
                 || total > 0 && contribution.accumulatedDamage / total < configuration.assistMinimumPercentage()
                 || runtime.player(contribution.attackerUuid).isEmpty()) {
@@ -503,9 +610,38 @@ public final class CombatOutcomeCoordinator implements
         return source.headshot() ? CombatKillClassification.HEADSHOT_KILL : CombatKillClassification.ENEMY_KILL;
     }
 
+    private CombatDamageSource effectiveSource(TargetLifeKey key, EntityDamageEvent cause, long nowNanos) {
+        TimedDamageSource timed = lastEffectiveDamage.get(key);
+        if (timed == null) return null;
+        if (!sourceStillValid(key, timed.source())) {
+            lastEffectiveDamage.remove(key);
+            return null;
+        }
+        boolean directCombatCause = cause instanceof EntityDamageByEntityEvent;
+        if (directCombatCause && timed.expiresAtMonotonic() >= nowNanos) {
+            return timed.source();
+        }
+        if (cause == null || cause instanceof EntityDamageByEntityEvent) {
+            return timed.expiresAtMonotonic() >= nowNanos ? timed.source() : null;
+        }
+        if (!configuration.environmentalAttributionEnabled()) return null;
+        return timed.environmentalExpiresAtMonotonic() >= nowNanos ? timed.source() : null;
+    }
+
+    private boolean sourceStillValid(TargetLifeKey key, CombatDamageSource source) {
+        var attacker = runtime.player(source.attackerUuid());
+        return attacker.isPresent()
+            && attacker.get().activeFor(key.matchId)
+            && attacker.get().lifeRevision() == source.attackerLifeRevision();
+    }
+
     private Optional<CombatDamageSource> sourceAsKiller(CombatDamageSource source, UUID victim) {
         if (source == null || source.attackerUuid().equals(victim)) return Optional.empty();
-        return source.friendly() ? Optional.empty() : Optional.of(source);
+        return source.friendly() && !configuration.friendlyFireEnabled() ? Optional.empty() : Optional.of(source);
+    }
+
+    private boolean isEnemyContribution(UUID attackerUuid, UUID targetUuid) {
+        return runtime.relation(attackerUuid, targetUuid) == CombatRelation.ENEMY;
     }
 
     private void createKillFeed(CombatDeathRecord record, Player victim) {
@@ -533,6 +669,12 @@ public final class CombatOutcomeCoordinator implements
         if (killFeed.isEmpty()) return;
         KillFeedEntry entry = killFeed.getLast();
         for (Player player : Bukkit.getOnlinePlayers()) {
+            if (killFeedDisabled.contains(player.getUniqueId())
+                || runtime.player(player.getUniqueId())
+                    .filter(snapshot -> snapshot.activeFor(runtime.snapshot().matchId()))
+                    .isEmpty()) {
+                continue;
+            }
             long previous = killFeedLastSent.getOrDefault(player.getUniqueId(), 0L);
             if (now - previous < configuration.killFeedThrottleNanos()) continue;
             killFeedLastSent.put(player.getUniqueId(), now);
@@ -543,6 +685,7 @@ public final class CombatOutcomeCoordinator implements
 
     private void tick(long nowNanos) {
         cleanupCorrelations(nowNanos);
+        cleanupDamageSources(nowNanos);
         cleanupProtections(nowNanos);
         cleanupKillFeed(nowNanos);
         renderFeedback(nowNanos);
@@ -553,6 +696,16 @@ public final class CombatOutcomeCoordinator implements
 
     private void cleanupCorrelations(long nowNanos) {
         correlations.entrySet().removeIf(entry -> entry.getValue().token.expiresAtMonotonic() < nowNanos);
+    }
+
+    private void cleanupDamageSources(long nowNanos) {
+        lastEffectiveDamage.entrySet().removeIf(entry ->
+            entry.getValue().expiresAtMonotonic() < nowNanos
+                && entry.getValue().environmentalExpiresAtMonotonic() < nowNanos);
+        contributions.entrySet().removeIf(entry -> {
+            entry.getValue().removeIf(value -> value.expiryAtMonotonic < nowNanos);
+            return entry.getValue().isEmpty();
+        });
     }
 
     private void cleanupProtections(long nowNanos) {
@@ -596,11 +749,20 @@ public final class CombatOutcomeCoordinator implements
             if (player == null) continue;
             if (selected == null) {
                 if (channels.isEmpty()) feedback.remove(playerUuid);
+                renderedFeedback.remove(playerUuid);
                 continue;
             }
-            if (!Objects.equals(selected.lastSent, selected.message.content())) {
+            RenderedFeedback rendered = renderedFeedback.get(playerUuid);
+            if (rendered == null
+                || rendered.channel != selected.message.channel()
+                || !Objects.equals(rendered.key, selected.message.deduplicationKey())
+                || !Objects.equals(rendered.content, selected.message.content())) {
                 player.sendActionBar(Component.text(selected.message.content()));
-                selected.lastSent = selected.message.content();
+                renderedFeedback.put(playerUuid, new RenderedFeedback(
+                    selected.message.channel(),
+                    selected.message.deduplicationKey(),
+                    selected.message.content()
+                ));
             }
         }
     }
@@ -608,6 +770,9 @@ public final class CombatOutcomeCoordinator implements
     private void updateHud(long nowNanos) {
         BattleRuntimeSnapshot battle = runtime.snapshot();
         for (Player player : Bukkit.getOnlinePlayers()) {
+            if (hudDisabled.contains(player.getUniqueId())) {
+                continue;
+            }
             if (player.getGameMode() == GameMode.SPECTATOR && runtime.player(player.getUniqueId()).isEmpty()) {
                 continue;
             }
@@ -674,10 +839,13 @@ public final class CombatOutcomeCoordinator implements
     }
 
     private void clearContributionsFor(UUID playerUuid) {
-        contributions.entrySet().removeIf(entry -> entry.getKey().targetUuid.equals(playerUuid)
-            || entry.getValue().removeIf(value -> value.attackerUuid.equals(playerUuid)));
+        contributions.entrySet().removeIf(entry -> {
+            if (entry.getKey().targetUuid.equals(playerUuid)) return true;
+            entry.getValue().removeIf(value -> value.attackerUuid.equals(playerUuid));
+            return entry.getValue().isEmpty();
+        });
         lastEffectiveDamage.entrySet().removeIf(entry -> entry.getKey().targetUuid.equals(playerUuid)
-            || entry.getValue().attackerUuid().equals(playerUuid));
+            || entry.getValue().source().attackerUuid().equals(playerUuid));
     }
 
     private void clearMatchState() {
@@ -686,8 +854,11 @@ public final class CombatOutcomeCoordinator implements
         lastEffectiveDamage.clear();
         protections.clear();
         feedback.clear();
+        renderedFeedback.clear();
         killFeed.clear();
         killFeedLastSent.clear();
+        hudDisabled.clear();
+        killFeedDisabled.clear();
         statistics.clear();
         for (HudContext context : hud.values()) context.close();
         hud.clear();
@@ -786,8 +957,13 @@ public final class CombatOutcomeCoordinator implements
                     sender.sendMessage("§c该命令只能由玩家执行。");
                     return true;
                 }
-                if ("off".equalsIgnoreCase(arguments[0])) clear(player.getUniqueId());
-                else hud.computeIfAbsent(player.getUniqueId(), ignored -> new HudContext(player));
+                if ("off".equalsIgnoreCase(arguments[0])) {
+                    hudDisabled.add(player.getUniqueId());
+                    closeHud(player.getUniqueId());
+                } else {
+                    hudDisabled.remove(player.getUniqueId());
+                    hud.computeIfAbsent(player.getUniqueId(), ignored -> new HudContext(player));
+                }
                 sender.sendMessage("§aHUD偏好已更新（仅当前连接生命周期）。");
                 return true;
             }
@@ -802,7 +978,9 @@ public final class CombatOutcomeCoordinator implements
                 } else {
                     Player target = Bukkit.getPlayerExact(arguments[1]);
                     if (target == null) sender.sendMessage("§c玩家不在线。");
-                    else {
+                    else if (hudDisabled.contains(target.getUniqueId())) {
+                        sender.sendMessage("§e该玩家已关闭HUD，刷新不会重新开启。");
+                    } else {
                         hud.computeIfAbsent(target.getUniqueId(), ignored -> new HudContext(target)).forceRefresh();
                         sender.sendMessage("§a已请求刷新玩家HUD。");
                     }
@@ -821,6 +999,15 @@ public final class CombatOutcomeCoordinator implements
                 if (!sender.hasPermission("warsim.player.killfeed.toggle")) {
                     sender.sendMessage("§c你没有权限执行该命令。");
                     return true;
+                }
+                if (!(sender instanceof Player player)) {
+                    sender.sendMessage("§c该命令只能由玩家执行。");
+                    return true;
+                }
+                if ("off".equalsIgnoreCase(arguments[0])) {
+                    killFeedDisabled.add(player.getUniqueId());
+                } else {
+                    killFeedDisabled.remove(player.getUniqueId());
                 }
                 sender.sendMessage("§aKillFeed偏好已更新（仅当前连接生命周期）。");
                 return true;
@@ -896,10 +1083,17 @@ public final class CombatOutcomeCoordinator implements
     }
 
     private record TargetLifeKey(UUID matchId, UUID targetUuid, long lifeRevision) {}
+    private record TimedDamageSource(
+        CombatDamageSource source,
+        long recordedAtMonotonic,
+        long expiresAtMonotonic,
+        long environmentalExpiresAtMonotonic
+    ) {}
+    private record RenderedFeedback(FeedbackChannel channel, String key, String content) {}
     private static final class MutableContribution {
         private final UUID attackerUuid;
         private final long attackerLifeRevision;
-        private final com.warsim.frontline.api.weapon.WeaponId weaponId;
+        private final Optional<com.warsim.frontline.api.weapon.WeaponId> weaponId;
         private final CombatDamageType type;
         private final boolean friendly;
         private double accumulatedDamage;
@@ -907,10 +1101,10 @@ public final class CombatOutcomeCoordinator implements
         private long expiryAtMonotonic;
         private boolean headshot;
         private MutableContribution(UUID attackerUuid, long attackerLifeRevision,
-            com.warsim.frontline.api.weapon.WeaponId weaponId, CombatDamageType type, boolean friendly) {
+            Optional<com.warsim.frontline.api.weapon.WeaponId> weaponId, CombatDamageType type, boolean friendly) {
             this.attackerUuid = attackerUuid;
             this.attackerLifeRevision = attackerLifeRevision;
-            this.weaponId = weaponId;
+            this.weaponId = weaponId == null ? Optional.empty() : weaponId;
             this.type = type;
             this.friendly = friendly;
         }
@@ -938,7 +1132,6 @@ public final class CombatOutcomeCoordinator implements
     }
     private static final class FeedbackState {
         private final FeedbackMessage message;
-        private String lastSent;
         private FeedbackState(FeedbackMessage message) { this.message = message; }
     }
     private final class HudContext {
@@ -979,7 +1172,12 @@ public final class CombatOutcomeCoordinator implements
             lastLines = List.copyOf(lines);
             metrics.hudUpdates.incrementAndGet();
         }
-        private void forceRefresh() { lastLines = List.of(); state = HudOwnershipState.AVAILABLE; }
+        private void forceRefresh() {
+            lastLines = List.of();
+            if (state != HudOwnershipState.BLOCKED_BY_FOREIGN_SCOREBOARD) {
+                state = HudOwnershipState.AVAILABLE;
+            }
+        }
         private void close() {
             if (board != null) {
                 for (Player player : Bukkit.getOnlinePlayers()) {

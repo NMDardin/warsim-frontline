@@ -1,4 +1,4 @@
-node:
+﻿node:
   id: "official-war-01"
   type: "OFFICIAL_BATTLE"
 logging:
@@ -74,8 +74,8 @@ match:
 teams:
   enabled: true
   assignment: { mode: "AUTO_BALANCE", maximum-difference: 1, deterministic-tie-break: true }
-  attackers: { maximum-players: 50, display-name: "进攻方" }
-  defenders: { maximum-players: 50, display-name: "防守方" }
+  attackers: { maximum-players: 50, display-name: "杩涙敾鏂? }
+  defenders: { maximum-players: 50, display-name: "闃插畧鏂? }
 squads:
   enabled: true
   maximum-per-team: 10
@@ -89,13 +89,12 @@ squads:
     cooldown-seconds: 15
   reconnect: { restore-assignment: true, grace-seconds: 120 }
 
-# 以下 alpha 坐标仅用于功能测试，正式地图必须重新测量。
-objectives:
+# 浠ヤ笅 alpha 鍧愭爣浠呯敤浜庡姛鑳芥祴璇曪紝姝ｅ紡鍦板浘蹇呴』閲嶆柊娴嬮噺銆?objectives:
   enabled: true
   scan-interval-ticks: 5
   points:
     alpha:
-      display-name: "A点"
+      display-name: "A鐐?
       world: "world"
       center: { x: 0.5, y: 64.0, z: 0.5 }
       radius: 8.0
@@ -120,25 +119,25 @@ classes:
   configuration-revision: 1
   definitions:
     assault:
-      display-name: "突击兵"
+      display-name: "绐佸嚮鍏?
       maximum-players: 100
       equipment:
         primary-weapon: { type: "weapon", weapon-id: "test_rifle" }
         secondary-weapon: { type: "weapon", weapon-id: "test_pistol" }
     medic:
-      display-name: "医护兵"
+      display-name: "鍖绘姢鍏?
       maximum-players: 100
       equipment:
         primary-weapon: { type: "weapon", weapon-id: "test_rifle" }
         secondary-weapon: { type: "weapon", weapon-id: "test_pistol" }
     support:
-      display-name: "支援兵"
+      display-name: "鏀彺鍏?
       maximum-players: 100
       equipment:
         primary-weapon: { type: "weapon", weapon-id: "test_smg" }
         secondary-weapon: { type: "weapon", weapon-id: "test_pistol" }
     scout:
-      display-name: "侦察兵"
+      display-name: "渚﹀療鍏?
       maximum-players: 100
       equipment:
         primary-weapon: { type: "weapon", weapon-id: "test_rifle" }
@@ -155,7 +154,7 @@ deployment:
     initial-deployment: { attackers: 0, defenders: 0 }
     respawn: { attackers: 1, defenders: 0 }
   waiting-spawn:
-    note: "模板坐标，部署到真实战斗地图前必须确认"
+    note: "妯℃澘鍧愭爣锛岄儴缃插埌鐪熷疄鎴樻枟鍦板浘鍓嶅繀椤荤‘璁?
     world: "world"
     x: 0.5
     y: 100.0
@@ -164,7 +163,7 @@ deployment:
     pitch: 0.0
   spawns:
     attackers:
-      note: "模板坐标，部署到真实战斗地图前必须确认"
+      note: "妯℃澘鍧愭爣锛岄儴缃插埌鐪熷疄鎴樻枟鍦板浘鍓嶅繀椤荤‘璁?
       world: "world"
       x: -20.5
       y: 65.0
@@ -183,6 +182,8 @@ combat:
   environmental-attribution:
     enabled: false
     ttl-seconds: 3
+  friendly-fire:
+    enabled: false
   spawn-protection:
     enabled: true
     duration-seconds: 5
@@ -214,7 +215,7 @@ kill-feed:
 feedback:
   enabled: true
     defenders:
-      note: "模板坐标，部署到真实战斗地图前必须确认"
+      note: "妯℃澘鍧愭爣锛岄儴缃插埌鐪熷疄鎴樻枟鍦板浘鍓嶅繀椤荤‘璁?
       world: "world"
       x: 20.5
       y: 65.0
@@ -222,5 +223,4 @@ feedback:
       yaw: -90.0
       pitch: 0.0
 
-# 独立WarSimFrontlineWeapons插件使用自己的config.yml。
-# Official Battle部署时保持weapons.enabled=true。
+# 鐙珛WarSimFrontlineWeapons鎻掍欢浣跨敤鑷繁鐨刢onfig.yml銆?# Official Battle閮ㄧ讲鏃朵繚鎸亀eapons.enabled=true銆?

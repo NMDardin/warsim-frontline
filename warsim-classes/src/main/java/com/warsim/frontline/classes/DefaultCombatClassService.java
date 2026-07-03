@@ -1,6 +1,7 @@
 package com.warsim.frontline.classes;
 
 import com.warsim.frontline.api.classes.*;
+import com.warsim.frontline.api.roster.TeamSide;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -145,6 +146,17 @@ public final class DefaultCombatClassService implements CombatClassService {
         if (deployments.containsKey(request.playerUuid())) {
             return rejected(DeploymentFailureReason.ALREADY_DEPLOYING, "已经有部署倒计时正在进行", null, now);
         }
+        if (current.combatState() == PlayerCombatState.ALIVE
+            || current.combatState() == PlayerCombatState.DEPLOYING
+            || current.combatState() == PlayerCombatState.CLOSED) {
+            return rejected(DeploymentFailureReason.INVALID_STATE,
+                "当前状态不允许开始部署", null, now);
+        }
+        if (request.reason() != current.nextDeploymentReason()) {
+            return rejected(DeploymentFailureReason.INVALID_STATE,
+                "部署类型与当前生命周期不一致", null, now);
+        }
+        current = withTeam(current, request.teamSide());
         CombatClassId requested = request.requestedClass();
         DeploymentResult applied = applyPendingIfPossible(current, requested, now);
         if (!applied.successful()) {
@@ -175,7 +187,7 @@ public final class DefaultCombatClassService implements CombatClassService {
         );
         selections.put(request.playerUuid(), new PlayerClassSelection(
             current.playerUuid(), current.matchId(), current.currentClass(), current.pendingClass(),
-            PlayerCombatState.DEPLOYING, current.successfulDeploymentCount(),
+            current.teamSide(), PlayerCombatState.DEPLOYING, current.successfulDeploymentCount(),
             current.lifeRevision(), deploymentRevision
         ));
         deployments.put(request.playerUuid(), context);
@@ -220,7 +232,7 @@ public final class DefaultCombatClassService implements CombatClassService {
         int deployed = current.successfulDeploymentCount() + 1;
         selections.put(context.playerUuid(), new PlayerClassSelection(
             current.playerUuid(), current.matchId(), Optional.of(context.requestedClass()),
-            Optional.empty(), PlayerCombatState.ALIVE, deployed,
+            Optional.empty(), Optional.of(context.teamSide()), PlayerCombatState.ALIVE, deployed,
             context.proposedLifeRevision(), context.deploymentRevision()
         ));
         if (context.reason() == DeploymentReason.INITIAL_DEPLOYMENT) {
@@ -253,6 +265,31 @@ public final class DefaultCombatClassService implements CombatClassService {
         dead.pendingClass().ifPresent(pending -> applyPendingIfPossible(dead, pending, now));
         return new DeploymentResult(true, DeploymentFailureReason.NONE,
             DeploymentTransactionStage.VALIDATED, "玩家已进入死亡状态", null);
+    }
+
+    @Override
+    public synchronized DeploymentResult markWaitingDeployment(
+        UUID playerUuid,
+        UUID expectedMatchId,
+        TeamSide teamSide,
+        Instant now
+    ) {
+        Objects.requireNonNull(playerUuid, "playerUuid");
+        Objects.requireNonNull(teamSide, "teamSide");
+        PlayerClassSelection current = selectionOrCreate(playerUuid, expectedMatchId);
+        if (current.combatState() == PlayerCombatState.ALIVE
+            || current.combatState() == PlayerCombatState.DEPLOYING
+            || current.combatState() == PlayerCombatState.CLOSED) {
+            return rejected(DeploymentFailureReason.INVALID_STATE,
+                "当前状态不能转为等待部署", null, now);
+        }
+        selections.put(playerUuid, new PlayerClassSelection(
+            current.playerUuid(), current.matchId(), current.currentClass(), current.pendingClass(),
+            Optional.of(teamSide), PlayerCombatState.WAITING_DEPLOYMENT,
+            current.successfulDeploymentCount(), current.lifeRevision(), current.deploymentRevision()
+        ));
+        return new DeploymentResult(true, DeploymentFailureReason.NONE,
+            DeploymentTransactionStage.VALIDATED, "已进入等待部署", null);
     }
 
     @Override
@@ -344,7 +381,7 @@ public final class DefaultCombatClassService implements CombatClassService {
                 .filter(definitions::containsKey);
             return new PlayerClassSelection(
                 playerUuid, matchId, Optional.empty(), preferred,
-                PlayerCombatState.NOT_DEPLOYED, 0, 0, 0
+                Optional.empty(), PlayerCombatState.NOT_DEPLOYED, 0, 0, 0
             );
         });
     }
@@ -375,7 +412,7 @@ public final class DefaultCombatClassService implements CombatClassService {
             return new DeploymentResult(true, DeploymentFailureReason.NONE,
                 DeploymentTransactionStage.VALIDATED, "兵种已应用", null);
         }
-        int occupied = occupied(target);
+        int occupied = occupied(target, current.teamSide());
         if (occupied >= definition.maximumPlayers()) {
             metrics.classLimitRejections.incrementAndGet();
             metrics.pendingClassApplicationFailures.incrementAndGet();
@@ -389,10 +426,11 @@ public final class DefaultCombatClassService implements CombatClassService {
             DeploymentTransactionStage.VALIDATED, "兵种已应用", null);
     }
 
-    private int occupied(CombatClassId target) {
+    private int occupied(CombatClassId target, Optional<TeamSide> teamSide) {
         int count = 0;
         for (PlayerClassSelection selection : selections.values()) {
             if (selection.combatState() == PlayerCombatState.CLOSED) continue;
+            if (teamSide.isPresent() && !selection.teamSide().equals(teamSide)) continue;
             if (selection.currentClass().filter(target::equals).isPresent()
                 && (selection.combatState() == PlayerCombatState.ALIVE
                     || selection.combatState() == PlayerCombatState.DEAD
@@ -419,9 +457,23 @@ public final class DefaultCombatClassService implements CombatClassService {
         PlayerCombatState state
     ) {
         return new PlayerClassSelection(
-            current.playerUuid(), current.matchId(), currentClass, pendingClass, state,
-            current.successfulDeploymentCount(), current.lifeRevision(), current.deploymentRevision()
+            current.playerUuid(), current.matchId(), currentClass, pendingClass,
+            current.teamSide(), state, current.successfulDeploymentCount(),
+            current.lifeRevision(), current.deploymentRevision()
         );
+    }
+
+    private PlayerClassSelection withTeam(PlayerClassSelection current, TeamSide teamSide) {
+        if (current.teamSide().filter(teamSide::equals).isPresent()) {
+            return current;
+        }
+        PlayerClassSelection updated = new PlayerClassSelection(
+            current.playerUuid(), current.matchId(), current.currentClass(), current.pendingClass(),
+            Optional.of(teamSide), current.combatState(), current.successfulDeploymentCount(),
+            current.lifeRevision(), current.deploymentRevision()
+        );
+        selections.put(current.playerUuid(), updated);
+        return updated;
     }
 
     private DeploymentResult rejected(

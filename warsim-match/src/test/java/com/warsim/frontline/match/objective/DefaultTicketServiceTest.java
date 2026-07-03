@@ -68,6 +68,53 @@ class DefaultTicketServiceTest {
         assertEquals(310, duplicate.snapshot().attackers().current());
     }
 
+    @Test void duplicateConsumeDoesNotChargeTwice() {
+        DefaultTicketService service = service();
+        UUID operationId = UUID.randomUUID();
+        TicketOperation operation = new TicketOperation(operationId, TeamSide.ATTACKERS,
+            TicketOperationType.TAKE, 1, TicketChangeReason.RESPAWN_COST, NOW);
+
+        TicketOperationResult first = service.tryConsume(operation);
+        TicketOperationResult second = service.tryConsume(operation);
+
+        assertTrue(first.successful());
+        assertTrue(second.duplicate());
+        assertEquals(299, second.snapshot().attackers().current());
+    }
+
+    @Test void duplicateRefundDoesNotRefundTwice() {
+        DefaultTicketService service = service();
+        UUID chargeId = UUID.randomUUID();
+        TicketOperation charge = new TicketOperation(chargeId, TeamSide.ATTACKERS,
+            TicketOperationType.TAKE, 1, TicketChangeReason.RESPAWN_COST, NOW);
+        assertTrue(service.tryConsume(charge).successful());
+        UUID refundId = UUID.randomUUID();
+        TicketOperation refund = new TicketOperation(refundId, TeamSide.ATTACKERS,
+            TicketOperationType.ADD, 1, TicketChangeReason.RESPAWN_REFUND, NOW);
+
+        TicketOperationResult first = service.refund(refund, chargeId);
+        TicketOperationResult second = service.refund(refund, chargeId);
+
+        assertTrue(first.successful());
+        assertTrue(second.duplicate());
+        assertEquals(300, second.snapshot().attackers().current());
+    }
+
+    @Test void unknownRefundIsRejectedAndStable() {
+        DefaultTicketService service = service();
+        UUID refundId = UUID.randomUUID();
+        TicketOperation refund = new TicketOperation(refundId, TeamSide.ATTACKERS,
+            TicketOperationType.ADD, 1, TicketChangeReason.RESPAWN_REFUND, NOW);
+
+        TicketOperationResult first = service.refund(refund, UUID.randomUUID());
+        TicketOperationResult second = service.refund(refund, UUID.randomUUID());
+
+        assertFalse(first.successful());
+        assertFalse(second.successful());
+        assertTrue(second.duplicate());
+        assertEquals(300, second.snapshot().attackers().current());
+    }
+
     @Test void changeEventPublishedForZeroAmount() {
         DefaultTicketService service = service();
         AtomicInteger events = new AtomicInteger();

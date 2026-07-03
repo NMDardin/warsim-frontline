@@ -13,4 +13,8 @@ public interface SpawnProtectionService {
     boolean removeOnAttack(UUID playerUuid, UUID matchId, long lifeRevision);
 
     boolean shouldBlockIncomingCombatDamage(UUID targetUuid, UUID matchId, long lifeRevision);
+
+    default long protectionDurationNanos() {
+        return 5_000_000_000L;
+    }
 }

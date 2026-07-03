@@ -5,7 +5,6 @@ import com.warsim.frontline.api.weapon.WeaponId;
 import com.warsim.frontline.weapons.DefaultWeaponService;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -15,9 +14,13 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.bukkit.Bukkit;
+import org.bukkit.NamespacedKey;
 import org.bukkit.entity.Player;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.persistence.PersistentDataContainer;
+import org.bukkit.persistence.PersistentDataType;
 
 final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisioningService {
     private static final int MAX_TOKENS = 512;
@@ -27,9 +30,15 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
     private final DefaultWeaponService weaponService;
     private final CraftEngineWeaponGateway gateway;
     private final UUID providerInstanceId = UUID.randomUUID();
+    private final NamespacedKey providerKey;
+    private final NamespacedKey matchKey;
+    private final NamespacedKey deploymentKey;
+    private final NamespacedKey lifeKey;
+    private final NamespacedKey itemInstanceKey;
+    private final NamespacedKey tokenKey;
+    private final NamespacedKey weaponKey;
     private final Map<UUID, TokenEntry> tokens = new HashMap<>();
     private final ArrayDeque<UUID> tokenOrder = new ArrayDeque<>();
-    private final Set<UUID> consumedTokens = new HashSet<>();
     private final Map<LifeKey, ManagedLoadout> loadouts = new HashMap<>();
     private final ArrayDeque<LifeKey> loadoutOrder = new ArrayDeque<>();
     private boolean closed;
@@ -42,6 +51,13 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
         this.plugin = Objects.requireNonNull(plugin, "plugin");
         this.weaponService = Objects.requireNonNull(weaponService, "weaponService");
         this.gateway = Objects.requireNonNull(gateway, "gateway");
+        this.providerKey = new NamespacedKey(plugin, "managed_provider");
+        this.matchKey = new NamespacedKey(plugin, "managed_match");
+        this.deploymentKey = new NamespacedKey(plugin, "managed_deployment_revision");
+        this.lifeKey = new NamespacedKey(plugin, "managed_life_revision");
+        this.itemInstanceKey = new NamespacedKey(plugin, "managed_item_instance");
+        this.tokenKey = new NamespacedKey(plugin, "managed_loadout_token");
+        this.weaponKey = new NamespacedKey(plugin, "managed_weapon_id");
     }
 
     @Override
@@ -97,39 +113,36 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
     public synchronized LoadoutProvisionResult grantPreparedLoadout(LoadoutPreparationToken token) {
         TokenEntry entry = tokens.remove(token.tokenId());
         tokenOrder.remove(token.tokenId());
-        if (entry == null || consumedTokens.contains(token.tokenId())) {
+        if (entry == null) {
             return LoadoutProvisionResult.rejected("Loadout token已失效或已使用");
         }
-        if (!token.providerInstanceId().equals(providerInstanceId)) {
-            return LoadoutProvisionResult.rejected("Loadout provider不匹配");
+        if (!entry.token().equals(token) || !token.providerInstanceId().equals(providerInstanceId)) {
+            return LoadoutProvisionResult.rejected("Loadout token身份不匹配");
         }
-        if (System.nanoTime() > token.expiresAtMonotonic()) {
+        if (System.nanoTime() > entry.token().expiresAtMonotonic()) {
             return LoadoutProvisionResult.rejected("Loadout token已过期");
         }
-        consumedTokens.add(token.tokenId());
-        Player player = Bukkit.getPlayer(token.playerUuid());
+        Player player = Bukkit.getPlayer(entry.token().playerUuid());
         if (player == null) {
             return LoadoutProvisionResult.rejected("玩家不在线，无法发放装备");
         }
         LifeKey key = new LifeKey(
-            token.playerUuid(), token.matchId(), token.deploymentRevision(),
-            token.proposedLifeRevision()
+            entry.token().playerUuid(), entry.token().matchId(),
+            entry.token().deploymentRevision(), entry.token().proposedLifeRevision()
         );
         clearLife(key);
         List<ItemStack> created = new ArrayList<>();
-        Set<String> managedItemIds = new HashSet<>();
+        Set<UUID> managedItemIds = new HashSet<>();
         Set<WeaponId> weaponIds = new HashSet<>();
         for (Map.Entry<EquipmentSlotType, EquipmentReference> slot : entry.equipment().slots().entrySet()) {
             EquipmentReference reference = slot.getValue();
             if (reference instanceof EmptyEquipmentReference) continue;
             Optional<ItemStack> item = Optional.empty();
+            Optional<WeaponId> weaponId = Optional.empty();
             if (reference instanceof WeaponEquipmentReference weapon) {
+                weaponId = Optional.of(weapon.weaponId());
                 item = gateway.create(weapon.weaponId(), player);
                 weaponIds.add(weapon.weaponId());
-                weaponService.refill(token.playerUuid(), token.matchId(), weapon.weaponId());
-                weaponService.clearWeapon(token.playerUuid(), token.matchId(), weapon.weaponId());
-                weaponService.refill(token.playerUuid(), token.matchId(), weapon.weaponId());
-                weaponService.cancelReload(token.playerUuid(), token.matchId(), weapon.weaponId());
             } else if (reference instanceof CraftEngineEquipmentReference craft) {
                 item = gateway.createCraftEngineItem(craft.namespacedItemId(), player);
             }
@@ -137,7 +150,9 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
                 removeCreated(player, created);
                 return LoadoutProvisionResult.rejected("装备生成失败: " + reference);
             }
-            gateway.customItemId(item.get()).ifPresent(managedItemIds::add);
+            UUID managedItemId = UUID.randomUUID();
+            markManaged(item.get(), entry.token(), managedItemId, weaponId);
+            managedItemIds.add(managedItemId);
             created.add(item.get());
         }
         Map<Integer, ItemStack> leftovers = player.getInventory().addItem(created.toArray(ItemStack[]::new));
@@ -145,8 +160,13 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
             removeCreated(player, created);
             return LoadoutProvisionResult.rejected("背包空间不足，装备未发放");
         }
+        for (WeaponId weaponId : weaponIds) {
+            weaponService.clearWeapon(entry.token().playerUuid(), entry.token().matchId(), weaponId);
+            weaponService.refill(entry.token().playerUuid(), entry.token().matchId(), weaponId);
+            weaponService.cancelReload(entry.token().playerUuid(), entry.token().matchId(), weaponId);
+        }
         rememberLoadout(key, new ManagedLoadout(key, managedItemIds, weaponIds));
-        return LoadoutProvisionResult.success("Loadout granted", token);
+        return LoadoutProvisionResult.success("Loadout granted", entry.token());
     }
 
     @Override
@@ -178,20 +198,18 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
 
     synchronized void removeManagedDeathDrops(PlayerDeathEvent event) {
         UUID player = event.getPlayer().getUniqueId();
-        Set<String> ids = new HashSet<>();
+        Set<UUID> ids = new HashSet<>();
         for (ManagedLoadout loadout : loadouts.values()) {
             if (loadout.key().playerUuid().equals(player)) ids.addAll(loadout.managedItemIds());
         }
         if (ids.isEmpty()) return;
-        event.getDrops().removeIf(item ->
-            gateway.customItemId(item).filter(ids::contains).isPresent());
+        event.getDrops().removeIf(item -> managedItemId(item).filter(ids::contains).isPresent());
     }
 
     synchronized void close() {
         closed = true;
         tokens.clear();
         tokenOrder.clear();
-        consumedTokens.clear();
         loadouts.clear();
         loadoutOrder.clear();
     }
@@ -221,8 +239,7 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
         Player player = Bukkit.getPlayer(key.playerUuid());
         if (player != null) {
             for (ItemStack item : player.getInventory().getContents()) {
-                if (gateway.customItemId(item)
-                    .filter(managed.managedItemIds()::contains).isPresent()) {
+                if (managedItemId(item).filter(managed.managedItemIds()::contains).isPresent()) {
                     item.setAmount(0);
                 }
             }
@@ -233,13 +250,47 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
 
     private void removeCreated(Player player, List<ItemStack> created) {
         for (ItemStack item : created) {
-            String id = gateway.customItemId(item).orElse(null);
+            UUID id = managedItemId(item).orElse(null);
             if (id == null) continue;
             for (ItemStack inventoryItem : player.getInventory().getContents()) {
-                if (gateway.customItemId(inventoryItem).filter(id::equals).isPresent()) {
+                if (managedItemId(inventoryItem).filter(id::equals).isPresent()) {
                     inventoryItem.setAmount(0);
                 }
             }
+        }
+    }
+
+    private void markManaged(
+        ItemStack item,
+        LoadoutPreparationToken token,
+        UUID managedItemId,
+        Optional<WeaponId> weaponId
+    ) {
+        ItemMeta meta = item.getItemMeta();
+        if (meta == null) return;
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        pdc.set(providerKey, PersistentDataType.STRING, providerInstanceId.toString());
+        pdc.set(matchKey, PersistentDataType.STRING, token.matchId().toString());
+        pdc.set(deploymentKey, PersistentDataType.LONG, token.deploymentRevision());
+        pdc.set(lifeKey, PersistentDataType.LONG, token.proposedLifeRevision());
+        pdc.set(itemInstanceKey, PersistentDataType.STRING, managedItemId.toString());
+        pdc.set(tokenKey, PersistentDataType.STRING, token.tokenId().toString());
+        weaponId.ifPresent(value -> pdc.set(weaponKey, PersistentDataType.STRING, value.value()));
+        item.setItemMeta(meta);
+    }
+
+    private Optional<UUID> managedItemId(ItemStack item) {
+        if (item == null || !item.hasItemMeta()) return Optional.empty();
+        PersistentDataContainer pdc = item.getItemMeta().getPersistentDataContainer();
+        if (!providerInstanceId.toString().equals(pdc.get(providerKey, PersistentDataType.STRING))) {
+            return Optional.empty();
+        }
+        String value = pdc.get(itemInstanceKey, PersistentDataType.STRING);
+        if (value == null) return Optional.empty();
+        try {
+            return Optional.of(UUID.fromString(value));
+        } catch (IllegalArgumentException ignored) {
+            return Optional.empty();
         }
     }
 
@@ -249,7 +300,7 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
 
     private record ManagedLoadout(
         LifeKey key,
-        Set<String> managedItemIds,
+        Set<UUID> managedItemIds,
         Set<WeaponId> weaponIds
     ) {
         ManagedLoadout {

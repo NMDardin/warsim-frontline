@@ -10,4 +10,8 @@ public record TicketOperationResult(
     public static TicketOperationResult rejected(String message, TicketSnapshot snapshot) {
         return new TicketOperationResult(false, false, message, snapshot, null);
     }
+
+    public TicketOperationResult asDuplicate() {
+        return new TicketOperationResult(successful, true, message, snapshot, change);
+    }
 }

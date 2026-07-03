@@ -27,7 +27,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import org.bukkit.GameMode;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -413,6 +412,7 @@ public final class PaperConfigLoader {
             Math.max(1, yaml.getLong("combat.damage-correlation-ttl-millis", 2000)) * 1_000_000L,
             yaml.getBoolean("combat.environmental-attribution.enabled", false),
             CombatPaperConfiguration.seconds(yaml.getLong("combat.environmental-attribution.ttl-seconds", 3)),
+            yaml.getBoolean("combat.friendly-fire.enabled", false),
             yaml.getBoolean("combat.spawn-protection.enabled", officialBattle),
             CombatPaperConfiguration.seconds(yaml.getLong("combat.spawn-protection.duration-seconds", 5)),
             yaml.getBoolean("combat.spawn-protection.block-incoming-damage", true),
@@ -474,12 +474,8 @@ public final class PaperConfigLoader {
 
     private static DeploymentPaperConfiguration loadDeploymentConfiguration(YamlConfiguration yaml) {
         boolean enabled = yaml.getBoolean("deployment.enabled", false);
-        GameMode waiting = GameMode.valueOf(
-            yaml.getString("deployment.waiting-game-mode", "SPECTATOR").toUpperCase()
-        );
-        GameMode combat = GameMode.valueOf(
-            yaml.getString("deployment.combat-game-mode", "SURVIVAL").toUpperCase()
-        );
+        String waiting = yaml.getString("deployment.waiting-game-mode", "SPECTATOR").toUpperCase();
+        String combat = yaml.getString("deployment.combat-game-mode", "SURVIVAL").toUpperCase();
         DeploymentTicketCosts costs = new DeploymentTicketCosts(
             yaml.getInt("deployment.ticket-cost.initial-deployment.attackers", 0),
             yaml.getInt("deployment.ticket-cost.initial-deployment.defenders", 0),

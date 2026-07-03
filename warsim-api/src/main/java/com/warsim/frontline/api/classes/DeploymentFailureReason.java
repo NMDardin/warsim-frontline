@@ -5,6 +5,7 @@ public enum DeploymentFailureReason {
     DISABLED,
     NOT_PLAYING,
     INVALID_MATCH,
+    INVALID_STATE,
     NO_LOCAL_SESSION,
     NO_ACTIVE_PARTICIPANT,
     NO_ROSTER_ASSIGNMENT,

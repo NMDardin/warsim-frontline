@@ -10,6 +10,10 @@ public interface CombatOutcomeService {
 
     boolean cancelDamageCorrelation(UUID correlationId, String reason, long cancelledAtMonotonic);
 
+    default long damageCorrelationTtlNanos() {
+        return 2_000_000_000L;
+    }
+
     Optional<PlayerCombatStatistics> statistics(UUID playerUuid);
 
     CombatOutcomeSnapshot snapshot();
