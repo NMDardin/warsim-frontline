@@ -117,6 +117,7 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
         } else if (event instanceof BattleMatchChangedEvent changed) {
             UUID currentMatch = changed.current().matchId();
             if (currentMatch != null && !Objects.equals(changed.previous().matchId(), currentMatch)) {
+                cancelAllDeployments("Match changed; deployment cancelled");
                 preferences.clear();
                 createService(currentMatch, changed.current().lifecycleRevision());
                 for (Player player : Bukkit.getOnlinePlayers()) playerJoined(player);
@@ -152,8 +153,14 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
     }
 
     @EventHandler public void onQuit(PlayerQuitEvent event) {
-        preferences.remove(event.getPlayer().getUniqueId());
-        service.playerDisconnected(event.getPlayer().getUniqueId(), Instant.now());
+        UUID playerUuid = event.getPlayer().getUniqueId();
+        preferences.remove(playerUuid);
+        DeploymentTransactionState tx = inFlightDeployments.get(playerUuid);
+        if (tx != null && inFlightMatchesActiveDeployment(playerUuid, tx)) {
+            compensateBeforeCommit(event.getPlayer(), tx);
+        }
+        service.playerDisconnected(playerUuid, Instant.now());
+        if (tx != null) removeInFlight(playerUuid, tx);
     }
 
     @EventHandler public void onDamage(EntityDamageEvent event) {
@@ -236,7 +243,9 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
     }
 
     private void completeDeployment(Player player, DeploymentContext context, long nowNanos) {
-        DeploymentTransactionState tx = new DeploymentTransactionState(context.stage(DeploymentTransactionStage.VALIDATED));
+        DeploymentTransactionState tx = new DeploymentTransactionState(
+            context.stage(DeploymentTransactionStage.VALIDATED), service
+        );
         Location spawn = null;
         try {
             if (!registerInFlight(player, tx)) {
@@ -299,12 +308,16 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
             tx.context = tx.context.stage(DeploymentTransactionStage.TICKET_CHARGED);
             resetLifeState(player.getUniqueId(), tx.context.matchId(), tx.context.deploymentRevision(),
                 tx.context.proposedLifeRevision(), "before-grant");
+            if (!transactionCanContinue(player, tx)) return;
             if (!player.teleport(spawn)) throw new IllegalStateException("teleport failed");
             tx.teleported = true;
+            if (!transactionCanContinue(player, tx)) return;
             player.setGameMode(combatGameMode());
+            if (!transactionCanContinue(player, tx)) return;
             tx.context = tx.context.stage(DeploymentTransactionStage.TELEPORTED);
             LoadoutProvisionResult granted = tx.provider.grantPreparedLoadout(prepared.token());
             if (!granted.successful()) throw new IllegalStateException(granted.message());
+            if (!transactionCanContinue(player, tx)) return;
             tx.loadoutGranted = true;
             tx.preparedTokenConsumed = true;
             tx.context = tx.context.stage(DeploymentTransactionStage.LOADOUT_GRANTED);
@@ -313,7 +326,7 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
             player.setHealth(Math.min(maximumHealth, 20.0));
             player.setFireTicks(0);
             tx.context = tx.context.stage(DeploymentTransactionStage.HEALTH_RESTORED);
-            DeploymentResult alive = service.markAlive(tx.context, Instant.now());
+            DeploymentResult alive = tx.owningService.markAlive(tx.context, Instant.now());
             if (!alive.successful()) throw new IllegalStateException(alive.message());
             tx.aliveCommitted = true;
         } catch (RuntimeException exception) {
@@ -345,6 +358,14 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
         if (inFlightDeployments.get(playerUuid) == tx) {
             inFlightDeployments.remove(playerUuid);
         }
+    }
+
+    private boolean transactionCanContinue(Player player, DeploymentTransactionState tx) {
+        if (tx.rolledBack || tx.aliveCommitted || !player.isOnline()) return false;
+        if (inFlightDeployments.get(player.getUniqueId()) != tx) return false;
+        return tx.owningService.activeDeployment(player.getUniqueId())
+            .map(context -> context.deploymentRevision() == tx.deploymentRevision)
+            .orElse(false);
     }
 
     private void postCommitSpawnProtection(Player player, DeploymentContext context, Location spawn, long nowNanos) {
@@ -431,16 +452,32 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
             + player.getUniqueId() + " reason=" + reason + " matchId=" + tx.context.matchId());
     }
 
-    private void compensateBeforeCommit(Player player, DeploymentTransactionState tx) {
-        if (tx.aliveCommitted || tx.rolledBack) return;
+    private DeploymentResult compensateBeforeCommit(Player player, DeploymentTransactionState tx) {
+        if (tx.rollbackResult != null) return tx.rollbackResult;
+        if (tx.aliveCommitted) {
+            tx.rollbackResult = DeploymentResult.rejected(
+                DeploymentFailureReason.INVALID_STATE,
+                "Deployment already committed",
+                tx.context
+            );
+            return tx.rollbackResult;
+        }
+        if (tx.rolledBack) {
+            tx.rollbackResult = DeploymentResult.rejected(
+                DeploymentFailureReason.INVALID_STATE,
+                "Deployment already rolled back",
+                tx.context
+            );
+            return tx.rollbackResult;
+        }
         tx.rolledBack = true;
-        service.mutableMetrics().deploymentRollbacks.incrementAndGet();
+        tx.owningService.mutableMetrics().deploymentRollbacks.incrementAndGet();
         cancelPreparedToken(tx);
         refundTicketCharge(tx);
         if (tx.provider != null) {
             try {
                 LoadoutProvisionResult cleared = tx.provider.clearManagedLoadout(new ManagedLoadoutClearRequest(
-                    player.getUniqueId(), tx.context.matchId(), tx.context.lifecycleRevision(),
+                    tx.context.playerUuid(), tx.context.matchId(), tx.context.lifecycleRevision(),
                     tx.context.deploymentRevision(), tx.context.proposedLifeRevision(),
                     tx.provider.providerInstanceId(), "deployment-rollback"
                 ));
@@ -452,7 +489,7 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
             }
             try {
                 LoadoutProvisionResult reset = tx.provider.resetCombatLifeState(new CombatLifeResetRequest(
-                    player.getUniqueId(), tx.context.matchId(), tx.context.lifecycleRevision(),
+                    tx.context.playerUuid(), tx.context.matchId(), tx.context.lifecycleRevision(),
                     tx.context.deploymentRevision(), tx.context.proposedLifeRevision(),
                     tx.provider.providerInstanceId(), "deployment-rollback"
                 ));
@@ -463,21 +500,31 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
                 plugin.getLogger().log(Level.WARNING, "[warsim-classes] combat life reset threw during rollback", exception);
             }
         }
-        try {
-            player.setGameMode(waitingGameMode());
-        } catch (RuntimeException exception) {
-            plugin.getLogger().log(Level.WARNING, "[warsim-classes] failed to restore waiting game mode during rollback", exception);
+        if (player != null && player.isOnline()) {
+            try {
+                player.setGameMode(waitingGameMode());
+            } catch (RuntimeException exception) {
+                plugin.getLogger().log(Level.WARNING, "[warsim-classes] failed to restore waiting game mode during rollback", exception);
+            }
+            try {
+                resolveWaitingSpawn().ifPresent(player::teleport);
+            } catch (RuntimeException exception) {
+                plugin.getLogger().log(Level.WARNING, "[warsim-classes] failed to teleport to waiting spawn during rollback", exception);
+            }
         }
         try {
-            resolveWaitingSpawn().ifPresent(player::teleport);
-        } catch (RuntimeException exception) {
-            plugin.getLogger().log(Level.WARNING, "[warsim-classes] failed to teleport to waiting spawn during rollback", exception);
-        }
-        try {
-            service.cancelDeployment(player.getUniqueId(), "Deployment failed; rolled back", Instant.now());
+            tx.rollbackResult = tx.owningService.cancelDeployment(
+                tx.context.playerUuid(), "Deployment failed; rolled back", Instant.now()
+            );
         } catch (RuntimeException exception) {
             plugin.getLogger().log(Level.WARNING, "[warsim-classes] failed to cancel deployment context during rollback", exception);
+            tx.rollbackResult = DeploymentResult.rejected(
+                DeploymentFailureReason.INVALID_STATE,
+                "Deployment rollback failed to cancel context",
+                tx.context
+            );
         }
+        return tx.rollbackResult;
     }
 
     private void cancelPreparedToken(DeploymentTransactionState tx) {
@@ -502,10 +549,10 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
                 refundOperationId(tx.context), tx.context.teamSide(), TicketOperationType.ADD,
                 cost, TicketChangeReason.RESPAWN_REFUND, Instant.now()
             ), tx.chargeOperationId);
-            if (refund.successful()) service.mutableMetrics().ticketRefunds.incrementAndGet();
-            else service.mutableMetrics().ticketRefundFailures.incrementAndGet();
+            if (refund.successful()) tx.owningService.mutableMetrics().ticketRefunds.incrementAndGet();
+            else tx.owningService.mutableMetrics().ticketRefundFailures.incrementAndGet();
         } catch (RuntimeException exception) {
-            service.mutableMetrics().ticketRefundFailures.incrementAndGet();
+            tx.owningService.mutableMetrics().ticketRefundFailures.incrementAndGet();
             plugin.getLogger().log(Level.WARNING, "[warsim-classes] ticket refund threw during rollback", exception);
         }
     }
@@ -586,13 +633,16 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
     }
 
     private void cancelAllDeployments(String reason) {
+        java.util.Set<UUID> compensated = new java.util.HashSet<>();
         for (Map.Entry<UUID, DeploymentTransactionState> entry : List.copyOf(inFlightDeployments.entrySet())) {
             Player player = Bukkit.getPlayer(entry.getKey());
-            if (player != null && inFlightMatchesActiveDeployment(entry.getKey(), entry.getValue())) {
+            if (inFlightMatchesActiveDeployment(entry.getKey(), entry.getValue())) {
                 compensateBeforeCommit(player, entry.getValue());
+                compensated.add(entry.getKey());
             }
         }
         for (Player player : Bukkit.getOnlinePlayers()) {
+            if (compensated.contains(player.getUniqueId())) continue;
             service.cancelDeployment(player.getUniqueId(), reason, Instant.now());
         }
     }
@@ -600,13 +650,14 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
     private DeploymentResult cancelDeployment(Player player, String reason) {
         DeploymentTransactionState tx = inFlightDeployments.get(player.getUniqueId());
         if (tx != null && inFlightMatchesActiveDeployment(player.getUniqueId(), tx)) {
-            compensateBeforeCommit(player, tx);
+            return compensateBeforeCommit(player, tx);
         }
         return service.cancelDeployment(player.getUniqueId(), reason, Instant.now());
     }
 
     private boolean inFlightMatchesActiveDeployment(UUID playerUuid, DeploymentTransactionState tx) {
-        return service.activeDeployment(playerUuid)
+        if (tx.rollbackResult != null) return true;
+        return tx.owningService.activeDeployment(playerUuid)
             .map(context -> context.deploymentRevision() == tx.deploymentRevision)
             .orElse(!tx.aliveCommitted);
     }
@@ -688,6 +739,7 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
 
     private static final class DeploymentTransactionState {
         private DeploymentContext context;
+        private final DefaultCombatClassService owningService;
         private CombatLoadoutProvisioningService provider;
         private boolean loadoutPrepared;
         private LoadoutPreparationToken preparedToken;
@@ -698,9 +750,11 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
         private boolean loadoutGranted;
         private boolean aliveCommitted;
         private boolean rolledBack;
+        private DeploymentResult rollbackResult;
         private final long deploymentRevision;
-        private DeploymentTransactionState(DeploymentContext context) {
+        private DeploymentTransactionState(DeploymentContext context, DefaultCombatClassService owningService) {
             this.context = context;
+            this.owningService = owningService;
             this.deploymentRevision = context.deploymentRevision();
         }
     }

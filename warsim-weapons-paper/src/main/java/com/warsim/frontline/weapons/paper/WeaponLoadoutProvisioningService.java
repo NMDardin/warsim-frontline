@@ -16,6 +16,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Predicate;
 import org.bukkit.Bukkit;
 import org.bukkit.NamespacedKey;
 import org.bukkit.entity.Player;
@@ -196,11 +197,19 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
                 }
             }
             tx.weaponStatesCommitted = true;
+            TokenEntry finalEntry = tokens.get(entry.token().tokenId());
+            if (finalEntry == null) {
+                rollbackGrant(tx);
+                return LoadoutProvisionResult.rejected("Loadout token is no longer active");
+            }
+            if (!finalEntry.token().equals(entry.token())
+                || !finalEntry.token().equals(token)
+                || !finalEntry.token().providerInstanceId().equals(providerInstanceId)) {
+                rollbackGrant(tx);
+                return LoadoutProvisionResult.rejected("Loadout token identity mismatch");
+            }
             removeToken(entry.token().tokenId());
             tx.tokenConsumed = true;
-            if (previousManaged != null) {
-                clearManagedItems(player, previousManaged.managedItemIds());
-            }
             return LoadoutProvisionResult.success("Loadout granted", entry.token());
         } catch (RuntimeException exception) {
             rollbackGrant(tx);
@@ -236,6 +245,65 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
         return LoadoutProvisionResult.success("Combat life state reset", null);
     }
 
+    synchronized void clearPlayer(Player player, String reason) {
+        Objects.requireNonNull(player, "player");
+        clearLoadouts(
+            key -> key.playerUuid().equals(player.getUniqueId()),
+            player,
+            "player " + reason
+        );
+    }
+
+    synchronized void clearPlayer(UUID playerUuid, String reason) {
+        clearLoadouts(
+            key -> key.playerUuid().equals(playerUuid),
+            Bukkit.getPlayer(playerUuid),
+            "player " + reason
+        );
+    }
+
+    synchronized void clearMatch(UUID matchId, String reason) {
+        for (UUID playerUuid : loadouts.keySet().stream()
+            .filter(key -> key.matchId().equals(matchId))
+            .map(LifeKey::playerUuid)
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new))) {
+            clearLoadouts(
+                key -> key.matchId().equals(matchId) && key.playerUuid().equals(playerUuid),
+                Bukkit.getPlayer(playerUuid),
+                "match " + reason
+            );
+        }
+    }
+
+    synchronized void reconcilePlayerInventory(Player player) {
+        Objects.requireNonNull(player, "player");
+        Set<UUID> indexed = new HashSet<>();
+        for (ManagedLoadout managed : loadouts.values()) {
+            if (managed.key().playerUuid().equals(player.getUniqueId())) {
+                indexed.addAll(managed.managedItemIds());
+            }
+        }
+        PlayerInventory inventory = player.getInventory();
+        ItemStack[] storage = deepClone(inventory.getStorageContents());
+        boolean changed = false;
+        for (int index = 0; index < storage.length; index++) {
+            ItemStack item = storage[index];
+            Optional<UUID> current = currentManagedItemId(item);
+            if (current.isPresent()) {
+                if (!indexed.contains(current.get())) {
+                    storage[index] = null;
+                    changed = true;
+                }
+                continue;
+            }
+            if (hasWarSimManagedMetadata(item)) {
+                storage[index] = null;
+                changed = true;
+            }
+        }
+        if (changed) inventory.setStorageContents(storage);
+    }
+
     synchronized void removeManagedDeathDrops(PlayerDeathEvent event) {
         UUID player = event.getPlayer().getUniqueId();
         Set<UUID> ids = new HashSet<>();
@@ -243,30 +311,25 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
             if (loadout.key().playerUuid().equals(player)) ids.addAll(loadout.managedItemIds());
         }
         if (ids.isEmpty()) return;
-        event.getDrops().removeIf(item -> managedItemId(item).filter(ids::contains).isPresent());
+        event.getDrops().removeIf(item -> currentManagedItemId(item).filter(ids::contains).isPresent());
     }
 
     synchronized void close() {
         closed = true;
         int offline = 0;
-        for (ManagedLoadout managed : List.copyOf(loadouts.values())) {
-            Player player = Bukkit.getPlayer(managed.key().playerUuid());
-            if (player != null) {
-                clearManagedItems(player, managed.managedItemIds());
-            } else {
-                offline++;
-            }
-            managed.weaponIds().forEach(weapon ->
-                weaponService.clearWeapon(managed.key().playerUuid(), managed.key().matchId(), weapon));
+        for (UUID playerUuid : loadouts.keySet().stream()
+            .map(LifeKey::playerUuid)
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new))) {
+            Player player = Bukkit.getPlayer(playerUuid);
+            if (player == null) offline++;
+            clearLoadouts(key -> key.playerUuid().equals(playerUuid), player, "close");
         }
         if (offline > 0) {
             plugin.getLogger().warning("[warsim-weapons] " + offline
-                + " offline managed loadout(s) could not be removed from player inventories during close.");
+                + " offline player inventory cleanup(s) deferred until next WarSim managed item reconcile.");
         }
         tokens.clear();
         tokenOrder.clear();
-        loadouts.clear();
-        loadoutOrder.clear();
     }
 
     private void rollbackGrant(GrantTransaction tx) {
@@ -386,13 +449,42 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
         if (managed == null) return;
         Player player = Bukkit.getPlayer(key.playerUuid());
         if (player != null) {
-            clearManagedItems(player, managed.managedItemIds());
-            loadouts.remove(key);
-            loadoutOrder.remove(key);
+            try {
+                clearManagedItems(player, managed.managedItemIds());
+            } catch (RuntimeException exception) {
+                plugin.getLogger().warning("[warsim-weapons] Managed loadout inventory cleanup failed; index was still cleared.");
+            }
         } else {
-            plugin.getLogger().warning("[warsim-weapons] Managed loadout for offline player could not be removed from inventory immediately.");
+            plugin.getLogger().warning("[warsim-weapons] Managed loadout inventory cleanup for offline player deferred until next reconcile.");
         }
+        loadouts.remove(key);
+        loadoutOrder.remove(key);
         managed.weaponIds().forEach(weapon -> weaponService.clearWeapon(key.playerUuid(), key.matchId(), weapon));
+    }
+
+    private void clearLoadouts(Predicate<LifeKey> predicate, Player player, String reason) {
+        List<ManagedLoadout> selected = loadouts.entrySet().stream()
+            .filter(entry -> predicate.test(entry.getKey()))
+            .map(Map.Entry::getValue)
+            .toList();
+        if (selected.isEmpty()) return;
+        Set<UUID> managedIds = new HashSet<>();
+        for (ManagedLoadout managed : selected) {
+            managedIds.addAll(managed.managedItemIds());
+            managed.weaponIds().forEach(weapon ->
+                weaponService.clearWeapon(managed.key().playerUuid(), managed.key().matchId(), weapon));
+            loadouts.remove(managed.key());
+            loadoutOrder.remove(managed.key());
+        }
+        if (player != null && !managedIds.isEmpty()) {
+            try {
+                clearManagedItems(player, managedIds);
+            } catch (RuntimeException exception) {
+                plugin.getLogger().warning("[warsim-weapons] Managed loadout inventory cleanup failed during " + reason + "; index was still cleared.");
+            }
+        } else if (player == null) {
+            plugin.getLogger().warning("[warsim-weapons] Managed loadout inventory cleanup deferred for offline player during " + reason + ".");
+        }
     }
 
     private void clearManagedItems(Player player, Set<UUID> managedIds) {
@@ -404,7 +496,7 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
 
     private void removeManagedItems(ItemStack[] storage, Set<UUID> managedIds) {
         for (int index = 0; index < storage.length; index++) {
-            if (managedItemId(storage[index]).filter(managedIds::contains).isPresent()) {
+            if (currentManagedItemId(storage[index]).filter(managedIds::contains).isPresent()) {
                 storage[index] = null;
             }
         }
@@ -429,7 +521,7 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
         item.setItemMeta(meta);
     }
 
-    private Optional<UUID> managedItemId(ItemStack item) {
+    private Optional<UUID> currentManagedItemId(ItemStack item) {
         if (item == null || item.getType().isAir() || !item.hasItemMeta()) return Optional.empty();
         PersistentDataContainer pdc = item.getItemMeta().getPersistentDataContainer();
         if (!providerInstanceId.toString().equals(pdc.get(providerKey, PersistentDataType.STRING))) {
@@ -441,6 +533,38 @@ final class WeaponLoadoutProvisioningService implements CombatLoadoutProvisionin
             return Optional.of(UUID.fromString(value));
         } catch (IllegalArgumentException ignored) {
             return Optional.empty();
+        }
+    }
+
+    private boolean hasWarSimManagedMetadata(ItemStack item) {
+        if (item == null || item.getType().isAir() || !item.hasItemMeta()) return false;
+        PersistentDataContainer pdc = item.getItemMeta().getPersistentDataContainer();
+        String provider = pdc.get(providerKey, PersistentDataType.STRING);
+        String itemId = pdc.get(itemInstanceKey, PersistentDataType.STRING);
+        String match = pdc.get(matchKey, PersistentDataType.STRING);
+        Long deployment = pdc.get(deploymentKey, PersistentDataType.LONG);
+        Long life = pdc.get(lifeKey, PersistentDataType.LONG);
+        String token = pdc.get(tokenKey, PersistentDataType.STRING);
+        String weapon = pdc.get(weaponKey, PersistentDataType.STRING);
+        if (provider == null && itemId == null && match == null && deployment == null
+            && life == null && token == null && weapon == null) {
+            return false;
+        }
+        return !validUuid(provider)
+            || !validUuid(itemId)
+            || !validUuid(match)
+            || deployment == null
+            || life == null
+            || !providerInstanceId.toString().equals(provider);
+    }
+
+    private static boolean validUuid(String value) {
+        if (value == null) return false;
+        try {
+            UUID.fromString(value);
+            return true;
+        } catch (IllegalArgumentException ignored) {
+            return false;
         }
     }
 

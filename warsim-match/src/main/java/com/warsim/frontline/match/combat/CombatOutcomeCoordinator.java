@@ -663,8 +663,8 @@ public final class CombatOutcomeCoordinator implements
     private void createKillFeed(CombatDeathRecord record, Player victim) {
         String killer = record.killer()
             .map(source -> Optional.ofNullable(Bukkit.getPlayer(source.attackerUuid()))
-                .map(Player::getName).orElse("Enemy"))
-            .orElse(record.classification() == CombatKillClassification.ENVIRONMENT ? "Environment" : "Unknown");
+                .map(Player::getName).orElse("敌方"))
+            .orElse(record.classification() == CombatKillClassification.ENVIRONMENT ? "环境" : "未知");
         String weapon = record.killer().flatMap(CombatDamageSource::weaponId)
             .map(Object::toString).orElse(record.classification().name());
         KillFeedEntry entry = new KillFeedEntry(
@@ -693,8 +693,8 @@ public final class CombatOutcomeCoordinator implements
             long previous = killFeedLastSent.getOrDefault(player.getUniqueId(), 0L);
             if (now - previous < configuration.killFeedThrottleNanos()) continue;
             killFeedLastSent.put(player.getUniqueId(), now);
-            player.sendMessage("\u00a77[Combat] \u00a7f" + entry.killerDisplayName() + " \u00a77defeated \u00a7f"
-                + entry.victimDisplayName() + (entry.headshot() ? " \u00a7eHeadshot" : ""));
+            player.sendMessage("§7[战况] §f" + entry.killerDisplayName() + " §7击败 §f"
+                + entry.victimDisplayName() + (entry.headshot() ? " §e爆头" : ""));
         }
     }
     private void tick(long nowNanos) {
@@ -800,18 +800,18 @@ public final class CombatOutcomeCoordinator implements
         PlayerCombatStatistics stats = statistics(player.getUniqueId())
             .orElse(PlayerCombatStatistics.empty(player.getUniqueId(), battle.matchId()));
         ArrayList<String> lines = new ArrayList<>();
-        lines.add("\u00a76WarSim Frontline");
-        lines.add("\u00a7fMatch: \u00a7a" + (battle.matchState() == null ? "N/A" : battle.matchState()));
-        lines.add("\u00a7fTime: \u00a7a--:--");
-        lines.add("\u00a7fTeam: \u00a7a" + playerSnapshot.flatMap(p -> p.assignment().map(a -> a.teamSide().name())).orElse("None"));
-        lines.add("\u00a7fSquad: \u00a7a" + playerSnapshot.flatMap(p -> p.assignment().flatMap(TeamAssignment::squadId).map(Object::toString)).orElse("None"));
-        lines.add("\u00a7fClass: \u00a7a" + classCoordinator.service().selection(player.getUniqueId())
-            .flatMap(value -> value.currentClass().map(Object::toString)).orElse("None"));
-        lines.add("\u00a7fState: \u00a7a" + playerSnapshot.map(p -> p.combatState().name()).orElse("N/A"));
-        lines.add("\u00a7fK/D/A: \u00a7a" + stats.kills() + "/" + stats.deaths() + "/" + stats.assists());
-        lines.add("\u00a7fStreak: \u00a7a" + stats.currentKillStreak());
+        lines.add("§6WarSim Frontline");
+        lines.add("§fMatch: §a" + (battle.matchState() == null ? "N/A" : battle.matchState()));
+        lines.add("§fTime: §a--:--");
+        lines.add("§fTeam: §a" + playerSnapshot.flatMap(p -> p.assignment().map(a -> a.teamSide().name())).orElse("无"));
+        lines.add("§fSquad: §a" + playerSnapshot.flatMap(p -> p.assignment().flatMap(TeamAssignment::squadId).map(Object::toString)).orElse("无"));
+        lines.add("§fClass: §a" + classCoordinator.service().selection(player.getUniqueId())
+            .flatMap(value -> value.currentClass().map(Object::toString)).orElse("未选择"));
+        lines.add("§fState: §a" + playerSnapshot.map(p -> p.combatState().name()).orElse("N/A"));
+        lines.add("§fK/D/A: §a" + stats.kills() + "/" + stats.deaths() + "/" + stats.assists());
+        lines.add("§fStreak: §a" + stats.currentKillStreak());
         snapshot(player.getUniqueId()).ifPresent(protection ->
-            lines.add("\u00a7fProtection: \u00a7a" + Math.max(0, (protection.expiresAtMonotonic() - System.nanoTime()) / 1_000_000_000L) + "s"));
+            lines.add("§f保护: §a" + Math.max(0, (protection.expiresAtMonotonic() - System.nanoTime()) / 1_000_000_000L) + "s"));
         return lines;
     }
     private int priority(FeedbackMessage message) {

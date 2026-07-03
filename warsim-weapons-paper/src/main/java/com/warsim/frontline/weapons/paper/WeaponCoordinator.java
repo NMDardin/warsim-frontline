@@ -55,6 +55,9 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
         this.damage = new PaperDamageAdapter(plugin, runtime, attribution, service);
         this.runtimeSubscription = runtime.subscribe(this);
         plugin.getServer().getPluginManager().registerEvents(this, plugin);
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            reconcilePlayerInventory(player, "startup");
+        }
     }
 
     DefaultWeaponService service() { return service; }
@@ -185,7 +188,7 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
         if (!battle.available() || battle.matchState() != MatchState.PLAYING
             || runtime.player(event.getPlayer().getUniqueId())
                 .filter(value -> value.activeFor(battle.matchId())).isEmpty()) {
-            notice(event.getPlayer(), "\u00a7cCurrent state cannot reload.");
+            notice(event.getPlayer(), "§c当前状态不能装填");
             return;
         }
         WeaponOperationResult result = service.startReload(
@@ -194,10 +197,10 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
         if (result.successful()) {
             reloading.put(event.getPlayer().getUniqueId(),
                 new ReloadKey(battle.matchId(), weapon.get()));
-            notice(event.getPlayer(), "\u00a7eReload started");
+            notice(event.getPlayer(), "§e开始装填");
             updateDisplay(event.getPlayer(), weapon.get());
         } else {
-            notice(event.getPlayer(), "\u00a7e" + result.message());
+            notice(event.getPlayer(), "§e" + result.message());
         }
     }
 
@@ -224,9 +227,15 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
     public void onQuit(PlayerQuitEvent event) {
         UUID player = event.getPlayer().getUniqueId();
         reloading.remove(player);
+        loadoutProvider.clearPlayer(event.getPlayer(), "quit");
         service.clearPlayer(player);
         clearFeedback(player);
         attribution.remove(player);
+    }
+
+    @EventHandler
+    public void onJoin(PlayerJoinEvent event) {
+        reconcilePlayerInventory(event.getPlayer(), "join");
     }
 
     @EventHandler
@@ -259,12 +268,19 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
                 || changed.current().matchState() == MatchState.FAILED
                 || changed.current().matchState() == MatchState.STOPPING
                 || changed.current().matchState() == MatchState.STOPPED)) {
+                loadoutProvider.clearMatch(changed.previous().matchId(), "runtime-event");
                 service.clearMatch(changed.previous().matchId());
                 reloading.clear();
                 attribution.clear();
                 clearAllFeedback();
             }
         } else if (event instanceof BattleParticipantEvent participant && !participant.joined()) {
+            Player player = Bukkit.getPlayer(participant.playerUuid());
+            if (player != null) {
+                loadoutProvider.clearPlayer(player, "participant-left");
+            } else {
+                loadoutProvider.clearPlayer(participant.playerUuid(), "participant-left");
+            }
             service.clearPlayer(participant.playerUuid());
             clearFeedback(participant.playerUuid());
             reloading.remove(participant.playerUuid());
@@ -282,7 +298,7 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
             ).filter(key.weaponId()::equals).isPresent()) {
                 service.cancelReload(entry.getKey(), key.matchId(), key.weaponId());
                 reloading.remove(entry.getKey());
-                if (player != null) notice(player, "\u00a7eReload cancelled");
+                if (player != null) notice(player, "§e装填已取消");
             }
         }
         service.completeReloads(now);
@@ -292,7 +308,7 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
             ).filter(value -> value.reloadState() == ReloadState.READY).ifPresent(value -> {
                 reloading.remove(entry.getKey());
                 Player player = Bukkit.getPlayer(entry.getKey());
-                if (player != null) notice(player, "\u00a7aReload complete");
+                if (player != null) notice(player, "§a装填完成");
             });
         }
     }
@@ -332,44 +348,54 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
     }
 
     private void shotFeedback(Player player, ShotResult result) {
-        shotFeedback(player, result, DamageApplicationResult.APPLIED);
+        shotFeedback(player, result, DamageApplicationResult.NOT_APPLICABLE);
     }
 
     private void shotFeedback(Player player, ShotResult result, DamageApplicationResult damageResult) {
-        String message = switch (result.outcome()) {
-            case FIRED_BODY_HIT -> damageResult == DamageApplicationResult.APPLIED
-                ? "\u00a7fHit" : damageBlockedMessage(damageResult);
-            case FIRED_HEAD_HIT -> damageResult == DamageApplicationResult.APPLIED
-                ? "\u00a7eHeadshot" : damageBlockedMessage(damageResult);
-            case FRIENDLY_BLOCKED -> blockedShotMessage(result);
-            case REJECTED_EMPTY -> "\u00a7cMagazine empty; press Q to reload";
-            case REJECTED_INTERNAL_ERROR -> "\u00a7cShot processing failed";
-            default -> null;
-        };
-        if (message == null) return;
-        if (!submitFeedback(player, message, "weapon:" + result.outcome(),
+        WeaponFeedback.ShotFeedbackPresentation presentation = shotPresentation(result, damageResult);
+        if (presentation == null) return;
+        if (!submitFeedback(player, presentation.text(), presentation.deduplicationKey(),
             result.request().matchId(), java.util.OptionalLong.of(runtime.player(player.getUniqueId())
                 .map(BattlePlayerSnapshot::lifeRevision).orElse(0L)))) {
-            feedback.shot(player, result);
+            feedback.show(player, presentation);
         }
+    }
+
+    private WeaponFeedback.ShotFeedbackPresentation shotPresentation(ShotResult result, DamageApplicationResult damageResult) {
+        String message = switch (result.outcome()) {
+            case FIRED_BODY_HIT -> damageResult == DamageApplicationResult.APPLIED
+                ? "§f命中" : damageBlockedMessage(damageResult);
+            case FIRED_HEAD_HIT -> damageResult == DamageApplicationResult.APPLIED
+                ? "§e爆头命中" : damageBlockedMessage(damageResult);
+            case FRIENDLY_BLOCKED -> blockedShotMessage(result);
+            case REJECTED_EMPTY -> "§c弹匣为空，按Q装填";
+            case REJECTED_INTERNAL_ERROR -> "§c射击处理失败";
+            default -> null;
+        };
+        if (message == null) return null;
+        WeaponFeedback.FeedbackDelivery delivery = result.outcome() == ShotOutcome.FIRED_BODY_HIT
+            || result.outcome() == ShotOutcome.FIRED_HEAD_HIT
+            ? WeaponFeedback.FeedbackDelivery.ACTION_BAR : WeaponFeedback.FeedbackDelivery.NOTICE;
+        String key = "weapon:" + result.outcome() + ":" + damageResult + ":" + result.relation();
+        return new WeaponFeedback.ShotFeedbackPresentation(message, key, delivery);
     }
 
     private String blockedShotMessage(ShotResult result) {
         return switch (result.relation()) {
-            case UNKNOWN -> "\u00a7eTarget relation unknown";
-            case SELF -> "\u00a7eSelf damage disabled";
-            case SQUADMATE, TEAMMATE -> "\u00a7eFriendly fire blocked";
-            default -> "\u00a7eDamage blocked";
+            case UNKNOWN -> "§e目标关系未知，伤害已阻止";
+            case SELF -> "§e自身伤害已阻止";
+            case SQUADMATE, TEAMMATE -> "§e友军伤害已阻止";
+            default -> "§e伤害已阻止";
         };
     }
 
     private String damageBlockedMessage(DamageApplicationResult result) {
         return switch (result) {
-            case BLOCKED_BY_SPAWN_PROTECTION -> "\u00a7eTarget is spawn protected";
-            case CANCELLED_BY_EVENT -> "\u00a7eDamage was cancelled by the server";
-            case NO_EFFECTIVE_DAMAGE -> "\u00a7eNo effective damage";
-            case STALE_CONTEXT, TARGET_INVALID -> "\u00a7eTarget state changed";
-            case INTERNAL_FAILURE -> "\u00a7cDamage application failed";
+            case BLOCKED_BY_SPAWN_PROTECTION -> "§e目标处于出生保护中";
+            case CANCELLED_BY_EVENT -> "§e伤害已被服务器拦截";
+            case NO_EFFECTIVE_DAMAGE -> "§e未造成有效伤害";
+            case STALE_CONTEXT, TARGET_INVALID -> "§e目标状态已改变";
+            case INTERNAL_FAILURE -> "§c伤害应用失败";
             default -> null;
         };
     }
@@ -415,18 +441,43 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
     }
 
     private void clearFeedback(UUID playerUuid) {
-        feedback.clear(playerUuid);
-        RegisteredServiceProvider<PlayerFeedbackService> registration =
-            Bukkit.getServicesManager().getRegistration(PlayerFeedbackService.class);
-        if (registration != null) registration.getProvider().clear(playerUuid, FeedbackChannel.WEAPON);
+        try {
+            feedback.clear(playerUuid);
+        } catch (RuntimeException exception) {
+            plugin.getLogger().log(Level.WARNING, "[warsim-weapons] Local weapon feedback clear failed.", exception);
+        }
+        try {
+            RegisteredServiceProvider<PlayerFeedbackService> registration =
+                Bukkit.getServicesManager().getRegistration(PlayerFeedbackService.class);
+            if (registration != null) registration.getProvider().clear(playerUuid, FeedbackChannel.WEAPON);
+        } catch (RuntimeException exception) {
+            plugin.getLogger().log(Level.WARNING, "[warsim-weapons] Shared weapon feedback clear failed.", exception);
+        }
     }
 
     private void clearAllFeedback() {
-        feedback.clearAll();
+        try {
+            feedback.clearAll();
+        } catch (RuntimeException exception) {
+            plugin.getLogger().log(Level.WARNING, "[warsim-weapons] Local weapon feedback clearAll failed.", exception);
+        }
         for (Player player : Bukkit.getOnlinePlayers()) {
-            RegisteredServiceProvider<PlayerFeedbackService> registration =
-                Bukkit.getServicesManager().getRegistration(PlayerFeedbackService.class);
-            if (registration != null) registration.getProvider().clear(player.getUniqueId(), FeedbackChannel.WEAPON);
+            try {
+                RegisteredServiceProvider<PlayerFeedbackService> registration =
+                    Bukkit.getServicesManager().getRegistration(PlayerFeedbackService.class);
+                if (registration != null) registration.getProvider().clear(player.getUniqueId(), FeedbackChannel.WEAPON);
+            } catch (RuntimeException exception) {
+                plugin.getLogger().log(Level.WARNING, "[warsim-weapons] Shared weapon feedback clearAll failed.", exception);
+            }
+        }
+    }
+
+    private void reconcilePlayerInventory(Player player, String reason) {
+        try {
+            loadoutProvider.reconcilePlayerInventory(player);
+        } catch (RuntimeException exception) {
+            plugin.getLogger().log(Level.WARNING,
+                "[warsim-weapons] Managed inventory reconcile failed during " + reason + ".", exception);
         }
     }
 
@@ -448,7 +499,7 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
 
     private void internalFailure(Player player, RuntimeException exception) {
         plugin.getLogger().log(Level.SEVERE, "[warsim-weapons] Shot processing failed.", exception);
-        notice(player, "\u00a7cShot processing failed");
+        notice(player, "§c射击处理失败");
     }
 
     private static ShotOutcome map(WeaponFailureReason reason) {
@@ -465,20 +516,29 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
     public void close() {
         if (closed) return;
         closed = true;
-        HandlerList.unregisterAll(this);
+        closeStep("listeners", () -> HandlerList.unregisterAll(this));
+        closeStep("runtime subscription", runtimeSubscription::close);
+        closeStep("reload tracking", reloading::clear);
+        closeStep("damage adapter", damage::close);
+        closeStep("damage attribution", attribution::close);
+        closeStep("weapon feedback channels", this::clearAllFeedback);
+        closeStep("loadout provider", loadoutProvider::close);
+        closeStep("weapon service", service::close);
+        closeStep("local feedback", feedback::close);
+    }
+
+    private void closeStep(String name, CloseStep step) {
         try {
-            runtimeSubscription.close();
+            step.close();
         } catch (Exception exception) {
-            plugin.getLogger().log(Level.WARNING, "[warsim-weapons] Failed to unregister runtime subscription.", exception);
+            plugin.getLogger().log(Level.WARNING, "[warsim-weapons] Failed to close " + name + ".", exception);
         }
-        reloading.clear();
-        clearAllFeedback();
-        damage.close();
-        attribution.close();
-        loadoutProvider.close();
-        service.close();
-        feedback.close();
     }
 
     private record ReloadKey(UUID matchId, WeaponId weaponId) {}
+
+    @FunctionalInterface
+    private interface CloseStep {
+        void close() throws Exception;
+    }
 }

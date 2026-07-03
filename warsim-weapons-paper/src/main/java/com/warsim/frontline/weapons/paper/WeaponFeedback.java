@@ -1,6 +1,5 @@
 package com.warsim.frontline.weapons.paper;
 
-import com.warsim.frontline.api.roster.CombatRelation;
 import com.warsim.frontline.api.weapon.*;
 import java.util.HashMap;
 import java.util.Map;
@@ -13,15 +12,11 @@ final class WeaponFeedback implements AutoCloseable {
     private final Map<UUID, String> actionBars = new HashMap<>();
     private final Map<UUID, Long> notices = new HashMap<>();
 
-    void shot(Player player, ShotResult result) {
-        switch (result.outcome()) {
-            case FIRED_BODY_HIT -> player.sendActionBar(Component.text("\u00a7fHit"));
-            case FIRED_HEAD_HIT -> player.sendActionBar(Component.text("\u00a7eHeadshot"));
-            case FRIENDLY_BLOCKED -> notice(player, blockedMessage(result));
-            case REJECTED_EMPTY -> notice(player, "\u00a7cMagazine empty; press Q to reload");
-            case REJECTED_INTERNAL_ERROR -> notice(player, "\u00a7cShot processing failed");
-            default -> {
-            }
+    void show(Player player, ShotFeedbackPresentation presentation) {
+        if (presentation.delivery() == FeedbackDelivery.ACTION_BAR) {
+            player.sendActionBar(Component.text(presentation.text()));
+        } else {
+            notice(player, presentation.text());
         }
     }
 
@@ -57,13 +52,7 @@ final class WeaponFeedback implements AutoCloseable {
         clearAll();
     }
 
-    private String blockedMessage(ShotResult result) {
-        CombatRelation relation = result.relation();
-        return switch (relation) {
-            case UNKNOWN -> "\u00a7eTarget relation unknown";
-            case SELF -> "\u00a7eSelf damage disabled";
-            case SQUADMATE, TEAMMATE -> "\u00a7eFriendly fire blocked";
-            default -> "\u00a7eDamage blocked";
-        };
-    }
+    enum FeedbackDelivery { ACTION_BAR, NOTICE }
+
+    record ShotFeedbackPresentation(String text, String deduplicationKey, FeedbackDelivery delivery) {}
 }
