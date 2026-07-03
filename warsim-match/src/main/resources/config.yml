@@ -90,6 +90,21 @@ match:
   announcements:
     enabled: true
     warmup-countdown-seconds: [60, 30, 10, 5, 4, 3, 2, 1]
+  reset:
+    enabled: true
+    start-delay-ticks: 1
+    evacuate-online-players: true
+    maximum-transient-entities: 10000
+    transient-worlds:
+      - "world"
+    # 正式地图部署前必须确认 holding-spawn 和 transient-worlds。
+    holding-spawn:
+      world: "world"
+      x: 0.5
+      y: 100.0
+      z: 0.5
+      yaw: 0.0
+      pitch: 0.0
 
 teams:
   enabled: true

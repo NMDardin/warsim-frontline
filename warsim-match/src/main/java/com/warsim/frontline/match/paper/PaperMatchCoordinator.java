@@ -7,6 +7,7 @@ import com.warsim.frontline.api.match.MatchOperationResult;
 import com.warsim.frontline.api.match.MatchSnapshot;
 import com.warsim.frontline.api.match.MatchState;
 import com.warsim.frontline.api.match.MatchResetStartedEvent;
+import com.warsim.frontline.api.match.MatchStateChangedEvent;
 import com.warsim.frontline.api.match.MatchParticipantState;
 import com.warsim.frontline.api.roster.*;
 import com.warsim.frontline.api.objective.*;
@@ -22,7 +23,9 @@ import com.warsim.frontline.match.MatchRosterCoordinator;
 import com.warsim.frontline.match.objective.ObjectiveMatchCoordinator;
 import com.warsim.frontline.match.objective.DefaultObjectiveService;
 import com.warsim.frontline.match.MatchNodeStatusMapper;
+import com.warsim.frontline.match.config.RoundResetPaperConfiguration;
 import com.warsim.frontline.match.redis.PaperNodePublication;
+import com.warsim.frontline.match.reset.PaperMatchResetService;
 import com.warsim.frontline.squad.DefaultRosterService;
 import java.time.Duration;
 import java.time.Instant;
@@ -42,6 +45,7 @@ public final class PaperMatchCoordinator implements AutoCloseable {
     private final JavaPlugin plugin;
     private final MatchConfiguration configuration;
     private final DefaultMatchService service;
+    private final PaperMatchResetService resetService;
     private final DefaultRosterService roster;
     private final MatchRosterCoordinator rosterCoordinator;
     private final PaperMatchPresentation presentation;
@@ -56,6 +60,7 @@ public final class PaperMatchCoordinator implements AutoCloseable {
     private final ObjectiveMatchCoordinator objectiveCoordinator;
     private final PaperObjectiveDisplay objectiveDisplay;
     private final ArrayDeque<String> administratorHistory = new ArrayDeque<>();
+    private BattleRuntimeSnapshot lastPublishedBattleSnapshot;
     private int tickTaskId = -1;
     private long tickCounter;
 
@@ -64,6 +69,8 @@ public final class PaperMatchCoordinator implements AutoCloseable {
         String nodeId,
         MatchConfiguration configuration,
         String configurationError,
+        RoundResetPaperConfiguration roundResetConfiguration,
+        String roundResetConfigurationError,
         RosterConfiguration rosterConfiguration,
         String rosterConfigurationError,
         ObjectiveConfiguration objectiveConfiguration,
@@ -82,10 +89,13 @@ public final class PaperMatchCoordinator implements AutoCloseable {
         this.objectiveConfiguration = objectiveConfiguration;
         this.objectiveConfigurationError = objectiveConfigurationError;
         this.ticketConfigurationError = ticketConfigurationError;
+        this.resetService = new PaperMatchResetService(
+            plugin, roundResetConfiguration, localSessionActive
+        );
         this.service = new DefaultMatchService(
             nodeId,
             configuration,
-            com.warsim.frontline.api.match.MatchResetService.noOp(),
+            resetService,
             task -> {
                 if (Bukkit.isPrimaryThread()) {
                     task.run();
@@ -124,8 +134,16 @@ public final class PaperMatchCoordinator implements AutoCloseable {
             this.objectiveCoordinator = null;
             this.objectiveDisplay = null;
         }
+        lastPublishedBattleSnapshot = battleSnapshot();
+        service.subscribe(event -> {
+            if (event instanceof MatchStateChangedEvent changed) {
+                publishBattleSnapshotIfChanged(changed.occurredAt());
+            }
+        }, false);
         if (configurationError != null) {
             service.failInitialization("Match配置无效");
+        } else if (roundResetConfigurationError != null || !roundResetConfiguration.enabled()) {
+            service.failInitialization("Round Reset配置无效或未启用");
         } else if (rosterConfigurationError != null) {
             roster.failInitialization("Roster配置无效：" + rosterConfigurationError);
             service.failInitialization("Roster配置无效");
@@ -143,6 +161,7 @@ public final class PaperMatchCoordinator implements AutoCloseable {
         service.subscribe(event -> {
             if (event instanceof MatchResetStartedEvent) {
                 roster.clear();
+                if (objectiveDisplay != null) objectiveDisplay.clear();
             }
         }, false);
         battleRuntime.attach(this);
@@ -162,8 +181,9 @@ public final class PaperMatchCoordinator implements AutoCloseable {
         Predicate<UUID> localSessionActive
     ) {
         this(
-            plugin, nodeId, configuration, configurationError, rosterConfiguration,
-            rosterConfigurationError, objectiveConfiguration, objectiveConfigurationError,
+            plugin, nodeId, configuration, configurationError,
+            RoundResetPaperConfiguration.disabled(), "Round Reset is not configured",
+            rosterConfiguration, rosterConfigurationError, objectiveConfiguration, objectiveConfigurationError,
             ticketConfiguration, ticketConfigurationError, localSessionActive,
             new PaperBattleRuntime(ignored -> {}),
             new com.warsim.frontline.match.performance.DefaultPerformanceService(
@@ -255,6 +275,7 @@ public final class PaperMatchCoordinator implements AutoCloseable {
         lines.addAll(rosterStatusLines());
         lines.addAll(objectiveStatusSummaryLines());
         lines.addAll(ticketStatusLines());
+        lines.addAll(resetService.statusLines());
         return List.copyOf(lines);
     }
 
@@ -295,6 +316,16 @@ public final class PaperMatchCoordinator implements AutoCloseable {
         return new BattleRuntimeSnapshot(
             true, snapshot.matchId(), snapshot.lifecycleRevision(), snapshot.state()
         );
+    }
+
+    private void publishBattleSnapshotIfChanged(Instant occurredAt) {
+        BattleRuntimeSnapshot current = battleSnapshot();
+        BattleRuntimeSnapshot previous = lastPublishedBattleSnapshot;
+        if (previous != null && previous.equals(current)) return;
+        lastPublishedBattleSnapshot = current;
+        if (previous != null) {
+            battleRuntime.publish(new BattleMatchChangedEvent(previous, current, occurredAt));
+        }
     }
 
     public void setCombatEligibilityService(CombatEligibilityService combatEligibilityService) {
@@ -586,7 +617,6 @@ public final class PaperMatchCoordinator implements AutoCloseable {
                 currentSnapshot.lifecycleRevision(),
                 currentSnapshot.state().name()
             );
-            BattleRuntimeSnapshot before = battleSnapshot();
             if (tickCounter % 5 == 0) {
                 service.tick(monotonicNanos, now);
                 boolean newMatch = rosterCoordinator.tick(now);
@@ -618,9 +648,7 @@ public final class PaperMatchCoordinator implements AutoCloseable {
                 }
             }
             BattleRuntimeSnapshot after = battleSnapshot();
-            if (!before.equals(after)) {
-                battleRuntime.publish(new BattleMatchChangedEvent(before, after, now));
-            }
+            publishBattleSnapshotIfChanged(now);
             battleRuntime.publish(new BattleTickEvent(after, monotonicNanos, tickCounter, now));
             performanceSpan.success();
         } catch (RuntimeException exception) {
@@ -808,6 +836,8 @@ public final class PaperMatchCoordinator implements AutoCloseable {
             Bukkit.getScheduler().cancelTask(tickTaskId);
             tickTaskId = -1;
         }
+        service.close();
+        resetService.close();
         presentation.close();
         if (objectiveDisplay != null) objectiveDisplay.close();
         if (objectiveCoordinator != null) objectiveCoordinator.close();

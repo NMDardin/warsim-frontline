@@ -1,5 +1,17 @@
 # WarSim: Frontline
 
+## T-013 Round Reset
+
+T-013 adds the official battle round reset transaction. When a Match enters
+`RESETTING`, lifecycle listeners run first, then the Paper reset service
+evacuates local online battle players to a configured holding spawn and removes
+only whitelisted transient entities from configured battle worlds.
+
+This task does not restore blocks and does not copy, delete, unload, or rebuild
+Minecraft world folders. Configure `match.reset.holding-spawn` and
+`match.reset.transient-worlds` before enabling a production map. See
+[`docs/ROUND_RESET.md`](docs/ROUND_RESET.md).
+
 ## T-011 Classes and Deployment
 
 T-011 adds combat class selection plus deployment/respawn foundations. The bundled generic config keeps `deployment.enabled=false` and does not guess production map coordinates. Configure waiting spawn and fixed team spawns before enabling deployment on a real battle node.

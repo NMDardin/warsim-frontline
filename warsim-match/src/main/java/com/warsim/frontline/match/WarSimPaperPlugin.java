@@ -159,6 +159,8 @@ public final class WarSimPaperPlugin extends JavaPlugin implements
                 config.node().id(),
                 config.match(),
                 config.matchConfigurationError(),
+                config.roundReset(),
+                config.roundResetConfigurationError(),
                 config.roster(),
                 config.rosterConfigurationError(),
                 config.objectives(),

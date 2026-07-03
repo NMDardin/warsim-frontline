@@ -71,6 +71,12 @@ match:
   announcements:
     enabled: true
     warmup-countdown-seconds: [60, 30, 10, 5, 4, 3, 2, 1]
+  reset:
+    enabled: false
+    start-delay-ticks: 1
+    evacuate-online-players: false
+    maximum-transient-entities: 0
+    transient-worlds: []
 teams:
   enabled: false
 squads:

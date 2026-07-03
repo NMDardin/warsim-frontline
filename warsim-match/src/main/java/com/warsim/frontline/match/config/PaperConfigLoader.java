@@ -23,6 +23,7 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.logging.Level;
@@ -84,6 +85,20 @@ public final class PaperConfigLoader {
                 matchConfiguration = MatchConfiguration.defaults(true);
                 matchConfigurationError = exception.getMessage();
                 logger.log(Level.SEVERE, "[warsim-match] Match配置无效，仅Match模块将进入FAILED。", exception);
+            }
+            RoundResetPaperConfiguration roundResetConfiguration;
+            String roundResetConfigurationError = null;
+            try {
+                roundResetConfiguration = loadRoundResetConfiguration(
+                    yaml,
+                    node.type() == NodeType.OFFICIAL_BATTLE && matchConfiguration.enabled()
+                );
+            } catch (RuntimeException exception) {
+                roundResetConfiguration = RoundResetPaperConfiguration.disabled();
+                roundResetConfigurationError = exception.getMessage();
+                logger.log(Level.SEVERE,
+                    "[warsim-reset] Round Reset configuration is invalid; Match reset will fail closed.",
+                    exception);
             }
             RosterConfiguration rosterConfiguration;
             String rosterConfigurationError = null;
@@ -367,6 +382,8 @@ public final class PaperConfigLoader {
                 ),
                 matchConfiguration,
                 matchConfigurationError,
+                roundResetConfiguration,
+                roundResetConfigurationError,
                 rosterConfiguration,
                 rosterConfigurationError,
                 objectiveConfiguration,
@@ -390,6 +407,39 @@ public final class PaperConfigLoader {
             );
             return WarSimPaperConfig.safeDefaults();
         }
+    }
+
+    private static RoundResetPaperConfiguration loadRoundResetConfiguration(
+        YamlConfiguration yaml,
+        boolean officialMatchEnabled
+    ) {
+        boolean enabled = yaml.getBoolean("match.reset.enabled", officialMatchEnabled);
+        ResetHoldingSpawn holdingSpawn = null;
+        if (yaml.contains("match.reset.holding-spawn.world")) {
+            holdingSpawn = new ResetHoldingSpawn(
+                yaml.getString("match.reset.holding-spawn.world", ""),
+                yaml.getDouble("match.reset.holding-spawn.x"),
+                yaml.getDouble("match.reset.holding-spawn.y"),
+                yaml.getDouble("match.reset.holding-spawn.z"),
+                (float) yaml.getDouble("match.reset.holding-spawn.yaw"),
+                (float) yaml.getDouble("match.reset.holding-spawn.pitch")
+            );
+        }
+        Set<String> transientWorlds = yaml.getStringList("match.reset.transient-worlds")
+            .stream()
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        RoundResetPaperConfiguration configuration = new RoundResetPaperConfiguration(
+            enabled,
+            yaml.getInt("match.reset.start-delay-ticks", 1),
+            yaml.getBoolean("match.reset.evacuate-online-players", enabled),
+            holdingSpawn,
+            transientWorlds,
+            yaml.getInt("match.reset.maximum-transient-entities", 10000)
+        );
+        if (officialMatchEnabled && !configuration.enabled()) {
+            throw new IllegalArgumentException("Official Battle requires match.reset.enabled=true");
+        }
+        return configuration;
     }
 
     private static CombatPaperConfiguration loadCombatConfiguration(

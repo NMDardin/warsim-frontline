@@ -32,6 +32,8 @@ public record WarSimPaperConfig(
     RedisConfiguration redis,
     MatchConfiguration match,
     String matchConfigurationError,
+    RoundResetPaperConfiguration roundReset,
+    String roundResetConfigurationError,
     RosterConfiguration roster,
     String rosterConfigurationError,
     ObjectiveConfiguration objectives,
@@ -56,6 +58,7 @@ public record WarSimPaperConfig(
         Objects.requireNonNull(database, "database");
         Objects.requireNonNull(redis, "redis");
         Objects.requireNonNull(match, "match");
+        Objects.requireNonNull(roundReset, "roundReset");
         Objects.requireNonNull(roster, "roster");
         Objects.requireNonNull(objectives, "objectives");
         Objects.requireNonNull(tickets, "tickets");
@@ -98,7 +101,9 @@ public record WarSimPaperConfig(
         this(
             node, debugLogging, pluginMessagingEnabled, channel, requestTimeoutMillis,
             maximumMessageBytes, allowedTargets, modelEngineEnabled, mythicMobsEnabled,
-            database, redis, match, matchConfigurationError, roster, rosterConfigurationError,
+            database, redis, match, matchConfigurationError,
+            RoundResetPaperConfiguration.disabled(), "Round Reset is not configured",
+            roster, rosterConfigurationError,
             ObjectiveConfiguration.disabled(), null, TicketConfiguration.disabled(), null,
             PerformanceConfiguration.disabled(Path.of("performance-reports")), null,
             CombatClassConfiguration.defaults(true), null,
@@ -122,6 +127,8 @@ public record WarSimPaperConfig(
             RedisConfiguration.defaults(),
             MatchConfiguration.defaults(true),
             null,
+            RoundResetPaperConfiguration.disabled(),
+            "Round Reset safely disabled because full config loading failed",
             RosterConfiguration.defaults(true),
             null,
             ObjectiveConfiguration.disabled(),
