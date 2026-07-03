@@ -13,6 +13,10 @@ public interface CombatLoadoutProvisioningService {
 
     LoadoutProvisionResult grantPreparedLoadout(LoadoutPreparationToken token);
 
+    default LoadoutProvisionResult cancelPreparedLoadout(LoadoutPreparationToken token, String reason) {
+        return LoadoutProvisionResult.success("No active prepared token", null);
+    }
+
     LoadoutProvisionResult clearManagedLoadout(ManagedLoadoutClearRequest request);
 
     LoadoutProvisionResult resetCombatLifeState(CombatLifeResetRequest request);

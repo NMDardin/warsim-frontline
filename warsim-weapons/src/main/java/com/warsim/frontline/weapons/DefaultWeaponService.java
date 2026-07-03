@@ -22,17 +22,18 @@ public final class DefaultWeaponService implements WeaponService {
             configuration.enabled() ? WeaponSystemState.ACTIVE : WeaponSystemState.DISABLED);
     }
 
-    public DefaultWeaponService(
-        WeaponConfiguration configuration, WeaponSystemState initialState
-    ) {
+    public DefaultWeaponService(WeaponConfiguration configuration, WeaponSystemState initialState) {
         this(configuration, new WeaponStateRegistry(), new HitscanBallisticsService(),
             new DefaultDamageCalculator(), new SpreadCalculator(), initialState);
     }
 
     DefaultWeaponService(
-        WeaponConfiguration configuration, WeaponStateRegistry registry,
-        HitscanBallisticsService ballistics, DefaultDamageCalculator damage,
-        SpreadCalculator spread, WeaponSystemState initialState
+        WeaponConfiguration configuration,
+        WeaponStateRegistry registry,
+        HitscanBallisticsService ballistics,
+        DefaultDamageCalculator damage,
+        SpreadCalculator spread,
+        WeaponSystemState initialState
     ) {
         this.configuration = Objects.requireNonNull(configuration, "configuration");
         if (initialState != WeaponSystemState.ACTIVE
@@ -67,24 +68,24 @@ public final class DefaultWeaponService implements WeaponService {
         UUID player, UUID match, WeaponId weaponId, long now
     ) {
         if (state != WeaponSystemState.ACTIVE) {
-            return reject(WeaponFailureReason.DISABLED, "武器系统不可用");
+            return reject(WeaponFailureReason.DISABLED, "Weapon system is unavailable");
         }
         WeaponDefinition definition = definitions.get(weaponId);
-        if (definition == null) return reject(WeaponFailureReason.INVALID_ITEM, "未知武器");
+        if (definition == null) return reject(WeaponFailureReason.INVALID_ITEM, "Unknown weapon");
         WeaponStateRegistry.MutableState runtime =
             registry.getOrCreate(player, match, definition);
         if (runtime.reload == ReloadState.RELOADING) {
-            return reject(WeaponFailureReason.RELOADING, "正在装填");
+            return reject(WeaponFailureReason.RELOADING, "Reloading");
         }
         if (runtime.magazine == 0) {
             metrics.emptyRejections.incrementAndGet();
-            return reject(WeaponFailureReason.EMPTY, "弹匣为空");
+            return reject(WeaponFailureReason.EMPTY, "Magazine is empty");
         }
         if (now < runtime.nextShot) {
             metrics.cooldownRejections.incrementAndGet();
-            return reject(WeaponFailureReason.COOLDOWN, "射速冷却中");
+            return reject(WeaponFailureReason.COOLDOWN, "Fire rate cooldown");
         }
-        return new WeaponOperationResult(true, WeaponFailureReason.NONE, "允许射击",
+        return new WeaponOperationResult(true, WeaponFailureReason.NONE, "Ready to fire",
             runtime.snapshot());
     }
 
@@ -215,17 +216,17 @@ public final class DefaultWeaponService implements WeaponService {
     ) {
         WeaponDefinition definition = definitions.get(weaponId);
         if (state != WeaponSystemState.ACTIVE || definition == null) {
-            return reject(WeaponFailureReason.INVALID_STATE, "武器系统不可用");
+            return reject(WeaponFailureReason.INVALID_STATE, "Weapon system is unavailable");
         }
         var runtime = registry.getOrCreate(player, match, definition);
         if (runtime.reload == ReloadState.RELOADING) {
-            return reject(WeaponFailureReason.RELOADING, "正在装填");
+            return reject(WeaponFailureReason.RELOADING, "Reloading");
         }
         if (runtime.magazine >= definition.ammo().magazineSize()) {
-            return reject(WeaponFailureReason.FULL_MAGAZINE, "弹匣已满");
+            return reject(WeaponFailureReason.FULL_MAGAZINE, "Magazine is full");
         }
         if (runtime.reserve == 0) {
-            return reject(WeaponFailureReason.NO_RESERVE, "没有备弹");
+            return reject(WeaponFailureReason.NO_RESERVE, "No reserve ammo");
         }
         runtime.reload = ReloadState.RELOADING;
         runtime.reloadStarted = now;
@@ -236,7 +237,7 @@ public final class DefaultWeaponService implements WeaponService {
             match, new ShotId(new UUID(0, 0)), weaponId, player,
             ReloadState.RELOADING, Instant.now()
         ));
-        return new WeaponOperationResult(true, WeaponFailureReason.NONE, "开始装填",
+        return new WeaponOperationResult(true, WeaponFailureReason.NONE, "Reload started",
             runtime.snapshot());
     }
 
@@ -288,10 +289,15 @@ public final class DefaultWeaponService implements WeaponService {
     }
     @Override public void clearMatch(UUID match) { registry.clearMatch(match); }
 
+    public synchronized void restoreRuntimeState(WeaponRuntimeState snapshot) {
+        Objects.requireNonNull(snapshot, "snapshot");
+        registry.restore(snapshot);
+    }
+
     @Override
     public synchronized WeaponOperationResult refill(UUID player, UUID match, WeaponId weaponId) {
         WeaponDefinition definition = definitions.get(weaponId);
-        if (definition == null) return reject(WeaponFailureReason.INVALID_ITEM, "未知武器");
+        if (definition == null) return reject(WeaponFailureReason.INVALID_ITEM, "Unknown weapon");
         var runtime = registry.getOrCreate(player, match, definition);
         runtime.magazine = definition.ammo().magazineSize();
         runtime.reserve = definition.ammo().reserveAmmo();
@@ -299,7 +305,7 @@ public final class DefaultWeaponService implements WeaponService {
         runtime.reloadStarted = 0;
         runtime.reloadCompletes = 0;
         runtime.revision++;
-        return new WeaponOperationResult(true, WeaponFailureReason.NONE, "弹药已补满",
+        return new WeaponOperationResult(true, WeaponFailureReason.NONE, "Ammo refilled",
             runtime.snapshot());
     }
 

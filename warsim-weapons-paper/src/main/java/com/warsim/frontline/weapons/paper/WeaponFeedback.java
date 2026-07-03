@@ -1,5 +1,6 @@
 package com.warsim.frontline.weapons.paper;
 
+import com.warsim.frontline.api.roster.CombatRelation;
 import com.warsim.frontline.api.weapon.*;
 import java.util.HashMap;
 import java.util.Map;
@@ -14,11 +15,11 @@ final class WeaponFeedback implements AutoCloseable {
 
     void shot(Player player, ShotResult result) {
         switch (result.outcome()) {
-            case FIRED_BODY_HIT -> player.sendActionBar(Component.text("§f命中"));
-            case FIRED_HEAD_HIT -> player.sendActionBar(Component.text("§e爆头命中"));
-            case FRIENDLY_BLOCKED -> notice(player, "§e友军伤害已阻止");
-            case REJECTED_EMPTY -> notice(player, "§c弹匣为空，按Q装填");
-            case REJECTED_INTERNAL_ERROR -> notice(player, "§c射击处理失败");
+            case FIRED_BODY_HIT -> player.sendActionBar(Component.text("\u00a7fHit"));
+            case FIRED_HEAD_HIT -> player.sendActionBar(Component.text("\u00a7eHeadshot"));
+            case FRIENDLY_BLOCKED -> notice(player, blockedMessage(result));
+            case REJECTED_EMPTY -> notice(player, "\u00a7cMagazine empty; press Q to reload");
+            case REJECTED_INTERNAL_ERROR -> notice(player, "\u00a7cShot processing failed");
             default -> {
             }
         }
@@ -54,5 +55,15 @@ final class WeaponFeedback implements AutoCloseable {
 
     @Override public void close() {
         clearAll();
+    }
+
+    private String blockedMessage(ShotResult result) {
+        CombatRelation relation = result.relation();
+        return switch (relation) {
+            case UNKNOWN -> "\u00a7eTarget relation unknown";
+            case SELF -> "\u00a7eSelf damage disabled";
+            case SQUADMATE, TEAMMATE -> "\u00a7eFriendly fire blocked";
+            default -> "\u00a7eDamage blocked";
+        };
     }
 }

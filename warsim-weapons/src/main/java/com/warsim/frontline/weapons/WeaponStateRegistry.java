@@ -37,6 +37,23 @@ public final class WeaponStateRegistry {
         states.remove(new Key(player, match, weapon));
     }
 
+    public synchronized void restore(WeaponRuntimeState snapshot) {
+        MutableState state = new MutableState(
+            snapshot.playerUuid(),
+            snapshot.matchId(),
+            snapshot.weaponId(),
+            snapshot.magazineAmmo(),
+            snapshot.reserveAmmo()
+        );
+        state.reload = snapshot.reloadState();
+        state.reloadStarted = snapshot.reloadStartedAtNanos();
+        state.reloadCompletes = snapshot.reloadCompletesAtNanos();
+        state.nextShot = snapshot.nextAllowedShotAtNanos();
+        state.shots = snapshot.shotsFired();
+        state.revision = snapshot.revision();
+        states.put(new Key(snapshot.playerUuid(), snapshot.matchId(), snapshot.weaponId()), state);
+    }
+
     public synchronized void clearMatch(UUID match) {
         states.keySet().removeIf(key -> key.match.equals(match));
     }
