@@ -11,13 +11,18 @@ import com.warsim.frontline.api.weapon.HitZone;
 import com.warsim.frontline.api.weapon.ShotResult;
 import com.warsim.frontline.weapons.DefaultWeaponService;
 import java.util.ArrayDeque;
+import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.bukkit.Bukkit;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.metadata.FixedMetadataValue;
+import org.bukkit.metadata.MetadataValue;
 import org.bukkit.plugin.RegisteredServiceProvider;
 
 final class PaperDamageAdapter {
@@ -30,6 +35,7 @@ final class PaperDamageAdapter {
     private final DamageAttributionRegistry attribution;
     private final DefaultWeaponService service;
     private final ArrayDeque<PendingDamageApplication> pendingApplications = new ArrayDeque<>();
+    private final Set<UUID> markedEntities = new HashSet<>();
 
     PaperDamageAdapter(
         WarSimWeaponsPlugin plugin,
@@ -56,6 +62,9 @@ final class PaperDamageAdapter {
         Player shooter = Bukkit.getPlayer(result.request().shooterUuid());
         Player target = Bukkit.getPlayer(result.hit().targetUuid());
         if (shooter == null || target == null || target.isDead()) return DamageApplicationResult.TARGET_INVALID;
+        if (result.relation() == com.warsim.frontline.api.roster.CombatRelation.UNKNOWN) {
+            return DamageApplicationResult.STALE_CONTEXT;
+        }
         var shooterSnapshot = runtime.player(shooter.getUniqueId());
         var targetSnapshot = runtime.player(target.getUniqueId());
         if (shooterSnapshot.filter(value -> value.activeFor(battle.matchId())).isEmpty()
@@ -84,10 +93,13 @@ final class PaperDamageAdapter {
                 Optional.of(result.request().weaponId()),
                 result.hit().hitZone() == HitZone.HEAD,
                 result.hit().distance(),
-                false,
+                result.friendly(),
                 now,
                 combat.damageCorrelationTtlNanos()
             ))).orElse(DamageCorrelationResult.rejected("Combat service unavailable"));
+        if (result.friendly() && !correlation.successful()) {
+            return DamageApplicationResult.STALE_CONTEXT;
+        }
         PendingDamageApplication pending = new PendingDamageApplication(
             shooter.getUniqueId(),
             target.getUniqueId(),
@@ -105,15 +117,15 @@ final class PaperDamageAdapter {
             stale.cancel(combatOutcomeService(), "pending-overflow");
         }
         try {
-            shooter.setMetadata(WEAPON_DAMAGE_CALL_METADATA, new FixedMetadataValue(plugin, pending.matchId.toString()));
-            target.setMetadata(WEAPON_DAMAGE_CALL_METADATA, new FixedMetadataValue(plugin, pending.matchId.toString()));
+            pushWeaponDamageMarker(shooter);
+            pushWeaponDamageMarker(target);
             target.damage(result.requestedDamage(), shooter);
         } catch (RuntimeException exception) {
             pending.cancel(combatOutcomeService(), "damage-api-exception");
             throw exception;
         } finally {
-            shooter.removeMetadata(WEAPON_DAMAGE_CALL_METADATA, plugin);
-            target.removeMetadata(WEAPON_DAMAGE_CALL_METADATA, plugin);
+            popWeaponDamageMarker(target);
+            popWeaponDamageMarker(shooter);
             pendingApplications.remove(pending);
         }
         if (!pending.completed && !pending.cancelled) {
@@ -192,6 +204,52 @@ final class PaperDamageAdapter {
 
     boolean isApplying(Player shooter, Player target) {
         return matching(shooter, target) != null;
+    }
+
+    void close() {
+        Optional<CombatOutcomeService> combat = combatOutcomeService();
+        for (PendingDamageApplication pending : List.copyOf(pendingApplications)) {
+            pending.cancel(combat, "plugin-close");
+        }
+        pendingApplications.clear();
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            if (markedEntities.contains(player.getUniqueId())) {
+                player.removeMetadata(WEAPON_DAMAGE_CALL_METADATA, plugin);
+            }
+        }
+        markedEntities.clear();
+    }
+
+    private void pushWeaponDamageMarker(Entity entity) {
+        int count = markerCount(entity).orElse(0);
+        entity.setMetadata(WEAPON_DAMAGE_CALL_METADATA, new FixedMetadataValue(plugin, count + 1));
+        markedEntities.add(entity.getUniqueId());
+    }
+
+    private void popWeaponDamageMarker(Entity entity) {
+        Optional<Integer> count = markerCount(entity);
+        if (count.isEmpty() || count.get() <= 1) {
+            if (count.isEmpty() && entity.hasMetadata(WEAPON_DAMAGE_CALL_METADATA)) {
+                plugin.getLogger().warning("[warsim-weapons] Invalid weapon damage metadata count; clearing marker.");
+            }
+            entity.removeMetadata(WEAPON_DAMAGE_CALL_METADATA, plugin);
+            markedEntities.remove(entity.getUniqueId());
+            return;
+        }
+        entity.setMetadata(WEAPON_DAMAGE_CALL_METADATA, new FixedMetadataValue(plugin, count.get() - 1));
+    }
+
+    private Optional<Integer> markerCount(Entity entity) {
+        boolean invalidOwnedValue = false;
+        for (MetadataValue value : entity.getMetadata(WEAPON_DAMAGE_CALL_METADATA)) {
+            if (value.getOwningPlugin() != plugin) continue;
+            Object raw = value.value();
+            if (raw instanceof Integer count && count > 0) return Optional.of(count);
+            if (raw instanceof Number number && number.intValue() > 0) return Optional.of(number.intValue());
+            invalidOwnedValue = true;
+        }
+        if (invalidOwnedValue) return Optional.empty();
+        return Optional.empty();
     }
 
     private static final class PendingDamageApplication {

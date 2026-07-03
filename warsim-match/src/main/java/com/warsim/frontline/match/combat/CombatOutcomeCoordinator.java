@@ -42,6 +42,7 @@ public final class CombatOutcomeCoordinator implements
     Listener,
     BattleRuntimeListener,
     CombatOutcomeService,
+    CombatPolicyService,
     SpawnProtectionService,
     PlayerFeedbackService,
     AutoCloseable {
@@ -94,6 +95,9 @@ public final class CombatOutcomeCoordinator implements
         runtimeSubscription = runtime.subscribe(this);
         plugin.getServer().getServicesManager().register(
             CombatOutcomeService.class, this, plugin, ServicePriority.Normal
+        );
+        plugin.getServer().getServicesManager().register(
+            CombatPolicyService.class, this, plugin, ServicePriority.Normal
         );
         plugin.getServer().getServicesManager().register(
             SpawnProtectionService.class, this, plugin, ServicePriority.Normal
@@ -189,6 +193,11 @@ public final class CombatOutcomeCoordinator implements
     }
 
     @Override
+    public boolean friendlyFireEnabled() {
+        return configuration.friendlyFireEnabled();
+    }
+
+    @Override
     public synchronized Optional<PlayerCombatStatistics> statistics(UUID playerUuid) {
         MutableStats stats = statistics.get(playerUuid);
         return stats == null ? Optional.empty() : Optional.of(stats.snapshot());
@@ -242,6 +251,10 @@ public final class CombatOutcomeCoordinator implements
         SpawnProtectionSnapshot protection = protections.get(playerUuid);
         if (protection == null || !protection.matchId().equals(matchId)
             || protection.lifeRevision() != lifeRevision) return false;
+        if (reason == SpawnProtectionRemovalReason.ATTACK
+            && !configuration.removeOnWeaponFire()) return false;
+        if (reason == SpawnProtectionRemovalReason.MELEE_ATTACK
+            && !configuration.removeOnMeleeAttack()) return false;
         if (reason == SpawnProtectionRemovalReason.OBJECTIVE_PRESENCE
             && !configuration.removeOnObjectivePresence()) return false;
         protections.remove(playerUuid);
@@ -358,18 +371,13 @@ public final class CombatOutcomeCoordinator implements
             || !attackerSnapshot.get().activeFor(battle.matchId())
             || !targetSnapshot.get().activeFor(battle.matchId())) return;
         CombatRelation relation = runtime.relation(attacker.getUniqueId(), target.getUniqueId());
-        boolean friendly = relation == CombatRelation.SELF
-            || relation == CombatRelation.SQUADMATE
-            || relation == CombatRelation.TEAMMATE
-            || relation == CombatRelation.UNKNOWN;
-        if (friendly && !configuration.friendlyFireEnabled()) {
+        boolean friendly = friendlyTeamRelation(relation);
+        if (relation == CombatRelation.UNKNOWN || friendly && !configuration.friendlyFireEnabled()) {
             event.setCancelled(true);
             return;
         }
-        if (configuration.removeOnMeleeAttack()) {
-            remove(attacker.getUniqueId(), battle.matchId(), attackerSnapshot.get().lifeRevision(),
-                SpawnProtectionRemovalReason.MELEE_ATTACK);
-        }
+        remove(attacker.getUniqueId(), battle.matchId(), attackerSnapshot.get().lifeRevision(),
+            SpawnProtectionRemovalReason.MELEE_ATTACK);
         if (shouldBlockIncomingCombatDamage(
             target.getUniqueId(), battle.matchId(), targetSnapshot.get().lifeRevision()
         )) {
@@ -392,11 +400,8 @@ public final class CombatOutcomeCoordinator implements
             || !attackerSnapshot.get().activeFor(battle.matchId())
             || !targetSnapshot.get().activeFor(battle.matchId())) return;
         CombatRelation relation = runtime.relation(attacker.getUniqueId(), target.getUniqueId());
-        boolean friendly = relation == CombatRelation.SELF
-            || relation == CombatRelation.SQUADMATE
-            || relation == CombatRelation.TEAMMATE
-            || relation == CombatRelation.UNKNOWN;
-        if (friendly && !configuration.friendlyFireEnabled()) return;
+        boolean friendly = friendlyTeamRelation(relation);
+        if (relation == CombatRelation.UNKNOWN || friendly && !configuration.friendlyFireEnabled()) return;
         double before = Math.max(0.0, target.getHealth());
         double effective = Math.min(event.getFinalDamage(), before);
         if (effective <= 0) return;
@@ -617,15 +622,18 @@ public final class CombatOutcomeCoordinator implements
             lastEffectiveDamage.remove(key);
             return null;
         }
-        boolean directCombatCause = cause instanceof EntityDamageByEntityEvent;
-        if (directCombatCause && timed.expiresAtMonotonic() >= nowNanos) {
+        if (directPlayerCauseMatches(cause, timed.source()) && timed.expiresAtMonotonic() >= nowNanos) {
             return timed.source();
         }
-        if (cause == null || cause instanceof EntityDamageByEntityEvent) {
-            return timed.expiresAtMonotonic() >= nowNanos ? timed.source() : null;
-        }
+        if (cause == null || cause instanceof EntityDamageByEntityEvent) return null;
         if (!configuration.environmentalAttributionEnabled()) return null;
         return timed.environmentalExpiresAtMonotonic() >= nowNanos ? timed.source() : null;
+    }
+
+    private boolean directPlayerCauseMatches(EntityDamageEvent cause, CombatDamageSource source) {
+        if (!(cause instanceof EntityDamageByEntityEvent byEntity)
+            || !(byEntity.getDamager() instanceof Player attacker)) return false;
+        return attacker.getUniqueId().equals(source.attackerUuid());
     }
 
     private boolean sourceStillValid(TargetLifeKey key, CombatDamageSource source) {
@@ -642,6 +650,10 @@ public final class CombatOutcomeCoordinator implements
 
     private boolean isEnemyContribution(UUID attackerUuid, UUID targetUuid) {
         return runtime.relation(attackerUuid, targetUuid) == CombatRelation.ENEMY;
+    }
+
+    private static boolean friendlyTeamRelation(CombatRelation relation) {
+        return relation == CombatRelation.SQUADMATE || relation == CombatRelation.TEAMMATE;
     }
 
     private void createKillFeed(CombatDeathRecord record, Player victim) {
@@ -901,6 +913,7 @@ public final class CombatOutcomeCoordinator implements
         commandRegistrations.clear();
         try {
             plugin.getServer().getServicesManager().unregister(CombatOutcomeService.class, this);
+            plugin.getServer().getServicesManager().unregister(CombatPolicyService.class, this);
             plugin.getServer().getServicesManager().unregister(SpawnProtectionService.class, this);
             plugin.getServer().getServicesManager().unregister(PlayerFeedbackService.class, this);
         } catch (RuntimeException ignored) {

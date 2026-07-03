@@ -9,7 +9,6 @@ import com.warsim.frontline.api.combat.SpawnProtectionService;
 import com.warsim.frontline.api.combat.SpawnProtectionSnapshot;
 import com.warsim.frontline.api.match.MatchParticipantState;
 import com.warsim.frontline.api.match.MatchState;
-import com.warsim.frontline.api.roster.TeamAssignment;
 import com.warsim.frontline.api.roster.TeamSide;
 import com.warsim.frontline.api.ticket.*;
 import com.warsim.frontline.classes.DefaultCombatClassService;
@@ -18,7 +17,6 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -37,13 +35,11 @@ import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
-import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.server.ServiceRegisterEvent;
 import org.bukkit.event.server.ServiceUnregisterEvent;
 import org.bukkit.plugin.RegisteredServiceProvider;
-import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 
 public final class PaperClassCoordinator implements Listener, BattleRuntimeListener, AutoCloseable {
@@ -60,15 +56,9 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
     private DefaultCombatClassService service;
     private boolean closed;
 
-    public PaperClassCoordinator(
-        JavaPlugin plugin,
-        PaperMatchCoordinator matchCoordinator,
-        PaperBattleRuntime runtime,
-        CombatClassConfiguration classConfiguration,
-        String classConfigurationError,
-        DeploymentPaperConfiguration deploymentConfiguration,
-        String deploymentConfigurationError
-    ) {
+    public PaperClassCoordinator(JavaPlugin plugin, PaperMatchCoordinator matchCoordinator, PaperBattleRuntime runtime,
+                                 CombatClassConfiguration classConfiguration, String classConfigurationError,
+                                 DeploymentPaperConfiguration deploymentConfiguration, String deploymentConfigurationError) {
         this.plugin = Objects.requireNonNull(plugin, "plugin");
         this.matchCoordinator = Objects.requireNonNull(matchCoordinator, "matchCoordinator");
         this.runtime = Objects.requireNonNull(runtime, "runtime");
@@ -88,53 +78,43 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
         refreshDeploymentProviderState();
     }
 
-    public CombatClassService service() {
-        return service;
-    }
+    public CombatClassService service() { return service; }
+    public Optional<CombatEligibilitySnapshot> eligibility(UUID playerUuid) { return service.eligibility(playerUuid); }
 
     public List<String> statusLines() {
         ClassDeploymentSnapshot snapshot = service.snapshot();
         ArrayList<String> lines = new ArrayList<>();
-        lines.add("§6WarSim Classes/Deployment");
-        lines.add("§fClass状态：§a" + snapshot.classState());
-        lines.add("§fDeployment状态：§a" + snapshot.deploymentState());
-        lines.add("§fclassRevision：§a" + snapshot.classConfigurationRevision());
-        lines.add("§fmatchId：§a" + snapshot.matchId());
-        lines.add("§f玩家状态数：§a" + snapshot.selections().size());
-        lines.add("§f部署指标 initial/respawn/rollback：§a"
+        lines.add("WarSim Classes/Deployment");
+        lines.add("classState=" + snapshot.classState());
+        lines.add("deploymentState=" + snapshot.deploymentState());
+        lines.add("classRevision=" + snapshot.classConfigurationRevision());
+        lines.add("matchId=" + snapshot.matchId());
+        lines.add("selections=" + snapshot.selections().size());
+        lines.add("deployments initial/respawn/rollback="
             + snapshot.metrics().initialDeployments() + "/"
             + snapshot.metrics().respawnDeployments() + "/"
             + snapshot.metrics().deploymentRollbacks());
-        snapshot.lastError().ifPresent(error -> lines.add("§f最近错误：§c" + error));
+        snapshot.lastError().ifPresent(error -> lines.add("lastError=" + error));
         return List.copyOf(lines);
-    }
-
-    public Optional<CombatEligibilitySnapshot> eligibility(UUID playerUuid) {
-        return service.eligibility(playerUuid);
     }
 
     public void playerJoined(Player player) {
         service.playerJoined(
-            player.getUniqueId(),
-            matchCoordinator.snapshot().matchId(),
-            Optional.ofNullable(preferences.get(player.getUniqueId())),
-            Instant.now()
+            player.getUniqueId(), matchCoordinator.snapshot().matchId(),
+            Optional.ofNullable(preferences.get(player.getUniqueId())), Instant.now()
         );
     }
 
-    @Override
-    public void onEvent(BattleRuntimeEvent event) {
+    @Override public void onEvent(BattleRuntimeEvent event) {
         if (closed) return;
         if (event instanceof BattleTickEvent tick) {
             tickDeployments(tick.monotonicNanos());
         } else if (event instanceof BattleMatchChangedEvent changed) {
             UUID currentMatch = changed.current().matchId();
-            if (currentMatch != null
-                && !Objects.equals(changed.previous().matchId(), currentMatch)) {
+            if (currentMatch != null && !Objects.equals(changed.previous().matchId(), currentMatch)) {
+                preferences.clear();
                 createService(currentMatch, changed.current().lifecycleRevision());
-                for (Player player : Bukkit.getOnlinePlayers()) {
-                    playerJoined(player);
-                }
+                for (Player player : Bukkit.getOnlinePlayers()) playerJoined(player);
             } else if (currentMatch != null) {
                 service.updateLifecycle(currentMatch, changed.current().lifecycleRevision());
             }
@@ -143,50 +123,43 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
                 || changed.current().matchState() == MatchState.FAILED
                 || changed.current().matchState() == MatchState.STOPPING
                 || changed.current().matchState() == MatchState.STOPPED) {
-                cancelAllDeployments("对局状态变化，部署已取消");
+                cancelAllDeployments("Match state changed; deployment cancelled");
             }
-            if (changed.current().matchState() == MatchState.PLAYING) {
-                enterWaitingDeploymentForPlayingPlayers();
-            }
+            if (changed.current().matchState() == MatchState.PLAYING) enterWaitingDeploymentForPlayingPlayers();
         } else if (event instanceof BattleRuntimeClosedEvent) {
             close();
         }
     }
 
-    @EventHandler
-    public void onServiceRegister(ServiceRegisterEvent event) {
+    @EventHandler public void onServiceRegister(ServiceRegisterEvent event) {
         if (event.getProvider().getService() == CombatLoadoutProvisioningService.class) {
             service.mutableMetrics().providerRegistrations.incrementAndGet();
             refreshDeploymentProviderState();
         }
     }
 
-    @EventHandler
-    public void onServiceUnregister(ServiceUnregisterEvent event) {
+    @EventHandler public void onServiceUnregister(ServiceUnregisterEvent event) {
         if (event.getProvider().getService() == CombatLoadoutProvisioningService.class) {
             service.mutableMetrics().providerUnregistrations.incrementAndGet();
-            cancelAllDeployments("装备服务已卸载，部署已取消");
+            cancelAllDeployments("Loadout service unloaded; deployment cancelled");
             refreshDeploymentProviderState();
         }
     }
 
-    @EventHandler
-    public void onQuit(PlayerQuitEvent event) {
+    @EventHandler public void onQuit(PlayerQuitEvent event) {
+        preferences.remove(event.getPlayer().getUniqueId());
         service.playerDisconnected(event.getPlayer().getUniqueId(), Instant.now());
     }
 
-    @EventHandler
-    public void onDamage(EntityDamageEvent event) {
+    @EventHandler public void onDamage(EntityDamageEvent event) {
         if (!(event instanceof EntityDamageByEntityEvent byEntity)
             || !(event.getEntity() instanceof Player player)
             || !(byEntity.getDamager() instanceof Player damager)) return;
         var battle = matchCoordinator.snapshot();
         if (battle.state() != MatchState.PLAYING) return;
         if (matchCoordinator.participant(damager.getUniqueId())
-            .filter(participant -> participant.matchId().equals(battle.matchId()))
-            .isEmpty()) return;
-        service.eligibility(player.getUniqueId())
-            .filter(value -> !value.eligible())
+            .filter(value -> value.matchId().equals(battle.matchId())).isEmpty()) return;
+        service.eligibility(player.getUniqueId()).filter(value -> !value.eligible())
             .ifPresent(ignored -> event.setCancelled(true));
     }
 
@@ -194,9 +167,7 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
         Optional<CombatEligibilitySnapshot> eligibility = service.eligibility(player.getUniqueId());
         if (eligibility.isEmpty()
             || eligibility.get().combatState() != PlayerCombatState.ALIVE
-            || eligibility.get().lifeRevision() != expectedLifeRevision) {
-            return;
-        }
+            || eligibility.get().lifeRevision() != expectedLifeRevision) return;
         UUID matchId = eligibility.get().matchId();
         long lifeRevision = eligibility.get().lifeRevision();
         service.markDead(player.getUniqueId(), matchId, lifeRevision, Instant.now());
@@ -205,8 +176,7 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
             lifeRevision, "death");
     }
 
-    @EventHandler
-    public void onRespawn(PlayerRespawnEvent event) {
+    @EventHandler public void onRespawn(PlayerRespawnEvent event) {
         Player player = event.getPlayer();
         service.selection(player.getUniqueId()).ifPresent(selection -> {
             if (selection.combatState() == PlayerCombatState.DEAD
@@ -214,11 +184,8 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
                 Location waiting = resolveWaitingSpawn().orElse(null);
                 if (waiting == null) {
                     service.mutableMetrics().waitingSpawnFallbacks.incrementAndGet();
-                    service.setDeploymentState(
-                        DeploymentSubsystemState.SPAWN_INVALID,
-                        "waiting-spawn无效，玩家保留Paper默认重生点"
-                    );
-                    player.sendMessage("§c等待部署点无效，已使用服务器默认重生点。请联系管理员。");
+                    service.setDeploymentState(DeploymentSubsystemState.SPAWN_INVALID, "waiting-spawn is invalid");
+                    player.sendMessage("ERROR: waiting-spawn is invalid; using server default respawn.");
                 } else {
                     event.setRespawnLocation(waiting);
                 }
@@ -264,131 +231,122 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
     }
 
     private void completeDeployment(Player player, DeploymentContext context, long nowNanos) {
-        DeploymentContext staged = context.stage(DeploymentTransactionStage.VALIDATED);
-        boolean[] rolledBack = {false};
+        DeploymentTransactionState tx = new DeploymentTransactionState(context.stage(DeploymentTransactionStage.VALIDATED));
+        Location spawn = null;
         try {
-            if (!revalidate(player, staged)) return;
-            CombatLoadoutProvisioningService provider = provider();
-            if (provider == null || !provider.isAvailable()) {
+            if (!revalidate(player, tx.context)) return;
+            tx.provider = provider();
+            if (tx.provider == null || !tx.provider.isAvailable()) {
                 service.mutableMetrics().providerUnavailableRejections.incrementAndGet();
-                failContext(player, staged, DeploymentFailureReason.PROVIDER_UNAVAILABLE,
-                    "装备服务不可用，无法部署");
+                failContext(player, tx.context, DeploymentFailureReason.PROVIDER_UNAVAILABLE, "Loadout service is unavailable");
                 return;
             }
-            var definition = classConfiguration.byId().get(staged.requestedClass());
+            var definition = classConfiguration.byId().get(tx.context.requestedClass());
             if (definition == null) {
-                failContext(player, staged, DeploymentFailureReason.NO_CLASS_SELECTED,
-                    "兵种定义不存在");
+                failContext(player, tx.context, DeploymentFailureReason.NO_CLASS_SELECTED, "Class definition is missing");
                 return;
             }
-            LoadoutValidationResult validation = provider.validateLoadout(definition.equipment());
+            LoadoutValidationResult validation = tx.provider.validateLoadout(definition.equipment());
             if (!validation.valid()) {
                 service.mutableMetrics().loadoutPreparationFailures.incrementAndGet();
-                failContext(player, staged, DeploymentFailureReason.LOADOUT_INVALID,
-                    validation.message());
+                failContext(player, tx.context, DeploymentFailureReason.LOADOUT_INVALID, validation.message());
                 return;
             }
-            staged = staged.stage(DeploymentTransactionStage.LOADOUT_PREPARED);
+            tx.context = tx.context.stage(DeploymentTransactionStage.LOADOUT_PREPARED);
+            tx.loadoutPrepared = true;
             service.mutableMetrics().loadoutPreparations.incrementAndGet();
-            LoadoutProvisionResult prepared = provider.prepareLoadout(new LoadoutPreparationRequest(
-                player.getUniqueId(), staged.matchId(), staged.lifecycleRevision(),
-                staged.deploymentRevision(), staged.currentLifeRevision(), staged.proposedLifeRevision(),
-                staged.requestedClass(), staged.classConfigurationRevision(), definition.equipment(),
+            LoadoutProvisionResult prepared = tx.provider.prepareLoadout(new LoadoutPreparationRequest(
+                player.getUniqueId(), tx.context.matchId(), tx.context.lifecycleRevision(),
+                tx.context.deploymentRevision(), tx.context.currentLifeRevision(), tx.context.proposedLifeRevision(),
+                tx.context.requestedClass(), tx.context.classConfigurationRevision(), definition.equipment(),
                 nowNanos, nowNanos + 30_000_000_000L
             ));
             if (!prepared.successful() || prepared.token() == null) {
                 service.mutableMetrics().loadoutPreparationFailures.incrementAndGet();
-                failContext(player, staged, DeploymentFailureReason.LOADOUT_INVALID,
-                    prepared.message());
+                failContext(player, tx.context, DeploymentFailureReason.LOADOUT_INVALID, prepared.message());
                 return;
             }
-            Location spawn = resolveSpawn(staged.teamSide()).orElse(null);
+            spawn = resolveSpawn(tx.context.teamSide()).orElse(null);
             if (spawn == null) {
                 service.mutableMetrics().unsafeSpawnRejections.incrementAndGet();
-                failContext(player, staged, DeploymentFailureReason.SPAWN_UNAVAILABLE,
-                    "没有可用安全出生点");
+                failContext(player, tx.context, DeploymentFailureReason.SPAWN_UNAVAILABLE, "No safe spawn is available");
                 return;
             }
-            TicketOperationResult charge = chargeTickets(staged);
+            DeploymentResult capacity = service.revalidateDeploymentCapacity(tx.context, Instant.now());
+            if (!capacity.successful()) {
+                failContext(player, tx.context, capacity.failureReason(), capacity.message());
+                return;
+            }
+            TicketOperationResult charge = chargeTickets(tx.context);
             if (!charge.successful()) {
-                failContext(player, staged, DeploymentFailureReason.TICKETS_DEPLETED, charge.message());
+                failContext(player, tx.context, DeploymentFailureReason.TICKETS_DEPLETED, charge.message());
                 return;
             }
-            staged = staged.stage(DeploymentTransactionStage.TICKET_CHARGED);
-            boolean committed = false;
-            try {
-                resetLifeState(player.getUniqueId(), staged.matchId(), staged.deploymentRevision(),
-                    staged.proposedLifeRevision(), "before-grant");
-                if (!player.teleport(spawn)) {
-                    throw new IllegalStateException("teleport failed");
-                }
-                player.setGameMode(combatGameMode());
-                staged = staged.stage(DeploymentTransactionStage.TELEPORTED);
-                LoadoutProvisionResult granted = provider.grantPreparedLoadout(prepared.token());
-                if (!granted.successful()) {
-                    throw new IllegalStateException(granted.message());
-                }
-                staged = staged.stage(DeploymentTransactionStage.LOADOUT_GRANTED);
-                double maximumHealth = player.getAttribute(Attribute.MAX_HEALTH) == null
-                    ? 20.0 : player.getAttribute(Attribute.MAX_HEALTH).getValue();
-                player.setHealth(Math.min(maximumHealth, 20.0));
-                player.setFireTicks(0);
-                staged = staged.stage(DeploymentTransactionStage.HEALTH_RESTORED);
-                DeploymentResult alive = service.markAlive(staged, Instant.now());
-                if (!alive.successful()) {
-                    throw new IllegalStateException(alive.message());
-                }
-                committed = true;
-                createSpawnProtection(player, staged, spawn, nowNanos);
-                player.sendMessage("§a已部署为 " + staged.requestedClass().value());
-            } finally {
-                if (!committed && charge.change() != null) {
-                    rollbackAfterChargeOnce(player, staged, charge.change().operationId(), provider, rolledBack);
-                }
+            if (charge.change() != null && charge.change().appliedDelta() < 0) {
+                tx.ticketCharged = true;
+                tx.chargeOperationId = charge.change().operationId();
             }
+            tx.context = tx.context.stage(DeploymentTransactionStage.TICKET_CHARGED);
+            resetLifeState(player.getUniqueId(), tx.context.matchId(), tx.context.deploymentRevision(),
+                tx.context.proposedLifeRevision(), "before-grant");
+            if (!player.teleport(spawn)) throw new IllegalStateException("teleport failed");
+            tx.teleported = true;
+            player.setGameMode(combatGameMode());
+            tx.context = tx.context.stage(DeploymentTransactionStage.TELEPORTED);
+            LoadoutProvisionResult granted = tx.provider.grantPreparedLoadout(prepared.token());
+            if (!granted.successful()) throw new IllegalStateException(granted.message());
+            tx.loadoutGranted = true;
+            tx.context = tx.context.stage(DeploymentTransactionStage.LOADOUT_GRANTED);
+            double maximumHealth = player.getAttribute(Attribute.MAX_HEALTH) == null
+                ? 20.0 : player.getAttribute(Attribute.MAX_HEALTH).getValue();
+            player.setHealth(Math.min(maximumHealth, 20.0));
+            player.setFireTicks(0);
+            tx.context = tx.context.stage(DeploymentTransactionStage.HEALTH_RESTORED);
+            DeploymentResult alive = service.markAlive(tx.context, Instant.now());
+            if (!alive.successful()) throw new IllegalStateException(alive.message());
+            tx.aliveCommitted = true;
         } catch (RuntimeException exception) {
-            plugin.getLogger().log(Level.SEVERE, "[warsim-classes] 部署事务失败", exception);
-            rollbackAfterChargeOnce(player, staged, chargeOperationId(staged), provider(), rolledBack);
-            failContext(player, staged, DeploymentFailureReason.INTERNAL_ERROR,
-                "部署失败，已回到等待部署状态");
+            plugin.getLogger().log(Level.SEVERE, "[warsim-classes] deployment transaction failed", exception);
+            compensateBeforeCommit(player, tx);
+            if (!tx.aliveCommitted) player.sendMessage("ERROR: Deployment failed; returned to waiting deployment");
+            return;
+        }
+        postCommitSpawnProtection(player, tx.context, spawn, nowNanos);
+        postCommitSuccessMessage(player, tx.context);
+    }
+
+    private void postCommitSpawnProtection(Player player, DeploymentContext context, Location spawn, long nowNanos) {
+        try {
+            createSpawnProtection(player, context, spawn, nowNanos);
+        } catch (RuntimeException exception) {
+            plugin.getLogger().log(Level.WARNING,
+                "[warsim-classes] post-commit spawn protection failed; deployment remains committed", exception);
         }
     }
 
-    private void createSpawnProtection(
-        Player player,
-        DeploymentContext context,
-        Location spawn,
-        long nowNanos
-    ) {
-        var registration = plugin.getServer().getServicesManager()
-            .getRegistration(SpawnProtectionService.class);
-        if (registration == null || spawn.getWorld() == null) return;
+    private void postCommitSuccessMessage(Player player, DeploymentContext context) {
+        try {
+            player.sendMessage("Deployed as " + context.requestedClass().value());
+        } catch (RuntimeException exception) {
+            plugin.getLogger().log(Level.WARNING,
+                "[warsim-classes] post-commit success message failed; deployment remains committed", exception);
+        }
+    }
+
+    private void createSpawnProtection(Player player, DeploymentContext context, Location spawn, long nowNanos) {
+        var registration = plugin.getServer().getServicesManager().getRegistration(SpawnProtectionService.class);
+        if (registration == null || spawn == null || spawn.getWorld() == null) return;
         long duration = registration.getProvider().protectionDurationNanos();
         registration.getProvider().create(new SpawnProtectionSnapshot(
-            player.getUniqueId(),
-            context.matchId(),
-            context.lifecycleRevision(),
-            context.proposedLifeRevision(),
-            context.deploymentRevision(),
-            context.spawnId(),
-            nowNanos,
-            nowNanos + duration,
-            new SpawnPositionSnapshot(
-                spawn.getWorld().getName(),
-                spawn.getX(),
-                spawn.getY(),
-                spawn.getZ()
-            )
+            player.getUniqueId(), context.matchId(), context.lifecycleRevision(),
+            context.proposedLifeRevision(), context.deploymentRevision(), context.spawnId(),
+            nowNanos, nowNanos + duration,
+            new SpawnPositionSnapshot(spawn.getWorld().getName(), spawn.getX(), spawn.getY(), spawn.getZ())
         ));
     }
 
-    private GameMode waitingGameMode() {
-        return GameMode.valueOf(deploymentConfiguration.waitingGameModeName());
-    }
-
-    private GameMode combatGameMode() {
-        return GameMode.valueOf(deploymentConfiguration.combatGameModeName());
-    }
+    private GameMode waitingGameMode() { return GameMode.valueOf(deploymentConfiguration.waitingGameModeName()); }
+    private GameMode combatGameMode() { return GameMode.valueOf(deploymentConfiguration.combatGameModeName()); }
 
     private boolean revalidate(Player player, DeploymentContext context) {
         var match = matchCoordinator.snapshot();
@@ -396,23 +354,20 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
             || match.lifecycleRevision() != context.lifecycleRevision()
             || match.state() != MatchState.PLAYING) {
             service.mutableMetrics().staleDeploymentsRejected.incrementAndGet();
-            failContext(player, context, DeploymentFailureReason.STALE_CONTEXT,
-                "部署已过期，请重新部署");
+            failContext(player, context, DeploymentFailureReason.STALE_CONTEXT, "Deployment context expired");
             return false;
         }
         var participant = matchCoordinator.participant(player.getUniqueId());
         if (participant.isEmpty()
             || participant.get().state() != MatchParticipantState.ACTIVE
             || !participant.get().matchId().equals(context.matchId())) {
-            failContext(player, context, DeploymentFailureReason.NO_ACTIVE_PARTICIPANT,
-                "你尚未成为有效战斗参与者");
+            failContext(player, context, DeploymentFailureReason.NO_ACTIVE_PARTICIPANT, "No active participant");
             return false;
         }
         var assignment = matchCoordinator.assignment(player.getUniqueId());
         if (assignment.isEmpty() || !assignment.get().connected()
             || assignment.get().teamSide() != context.teamSide()) {
-            failContext(player, context, DeploymentFailureReason.NO_ROSTER_ASSIGNMENT,
-                "没有有效阵营分配");
+            failContext(player, context, DeploymentFailureReason.NO_ROSTER_ASSIGNMENT, "No valid team assignment");
             return false;
         }
         return true;
@@ -421,66 +376,50 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
     private TicketOperationResult chargeTickets(DeploymentContext context) {
         int cost = deploymentConfiguration.ticketCosts().cost(context.reason(), context.teamSide());
         if (cost == 0) {
-            return new TicketOperationResult(true, false, "无需扣除票数",
-                matchCoordinator.ticketService() == null ? null : matchCoordinator.ticketService().snapshot(),
-                null);
+            return new TicketOperationResult(true, false, "No ticket charge required",
+                matchCoordinator.ticketService() == null ? null : matchCoordinator.ticketService().snapshot(), null);
         }
         TicketService tickets = matchCoordinator.ticketService();
-        if (tickets == null) {
-            return TicketOperationResult.rejected("票数系统不可用，无法扣除重生票",
-                null);
-        }
+        if (tickets == null) return TicketOperationResult.rejected("Ticket service is unavailable", null);
         return tickets.tryConsume(new TicketOperation(
             chargeOperationId(context), context.teamSide(), TicketOperationType.TAKE,
             cost, TicketChangeReason.RESPAWN_COST, Instant.now()
         ));
     }
 
-    private void rollbackAfterCharge(
-        Player player, DeploymentContext context, UUID chargeId,
-        CombatLoadoutProvisioningService provider
-    ) {
+    private void compensateBeforeCommit(Player player, DeploymentTransactionState tx) {
+        if (tx.aliveCommitted || tx.rolledBack) return;
+        tx.rolledBack = true;
         service.mutableMetrics().deploymentRollbacks.incrementAndGet();
-        int cost = deploymentConfiguration.ticketCosts().cost(context.reason(), context.teamSide());
-        if (cost > 0 && matchCoordinator.ticketService() != null) {
+        if (tx.ticketCharged && tx.chargeOperationId != null && matchCoordinator.ticketService() != null) {
+            int cost = deploymentConfiguration.ticketCosts().cost(tx.context.reason(), tx.context.teamSide());
             TicketOperationResult refund = matchCoordinator.ticketService().refund(new TicketOperation(
-                refundOperationId(context), context.teamSide(), TicketOperationType.ADD,
+                refundOperationId(tx.context), tx.context.teamSide(), TicketOperationType.ADD,
                 cost, TicketChangeReason.RESPAWN_REFUND, Instant.now()
-            ), chargeId);
+            ), tx.chargeOperationId);
             if (refund.successful()) service.mutableMetrics().ticketRefunds.incrementAndGet();
             else service.mutableMetrics().ticketRefundFailures.incrementAndGet();
         }
-        if (provider != null) {
-            provider.clearManagedLoadout(new ManagedLoadoutClearRequest(
-                player.getUniqueId(), context.matchId(), context.lifecycleRevision(),
-                context.deploymentRevision(), context.proposedLifeRevision(),
-                provider.providerInstanceId(), "deployment-rollback"
+        if (tx.provider != null) {
+            tx.provider.clearManagedLoadout(new ManagedLoadoutClearRequest(
+                player.getUniqueId(), tx.context.matchId(), tx.context.lifecycleRevision(),
+                tx.context.deploymentRevision(), tx.context.proposedLifeRevision(),
+                tx.provider.providerInstanceId(), "deployment-rollback"
             ));
-            provider.resetCombatLifeState(new CombatLifeResetRequest(
-                player.getUniqueId(), context.matchId(), context.lifecycleRevision(),
-                context.deploymentRevision(), context.proposedLifeRevision(),
-                provider.providerInstanceId(), "deployment-rollback"
+            tx.provider.resetCombatLifeState(new CombatLifeResetRequest(
+                player.getUniqueId(), tx.context.matchId(), tx.context.lifecycleRevision(),
+                tx.context.deploymentRevision(), tx.context.proposedLifeRevision(),
+                tx.provider.providerInstanceId(), "deployment-rollback"
             ));
         }
         player.setGameMode(waitingGameMode());
         resolveWaitingSpawn().ifPresent(player::teleport);
-        service.cancelDeployment(player.getUniqueId(), "部署失败，已回滚", Instant.now());
+        service.cancelDeployment(player.getUniqueId(), "Deployment failed; rolled back", Instant.now());
     }
 
-    private void rollbackAfterChargeOnce(
-        Player player, DeploymentContext context, UUID chargeId,
-        CombatLoadoutProvisioningService provider, boolean[] rolledBack
-    ) {
-        if (rolledBack[0]) return;
-        rolledBack[0] = true;
-        rollbackAfterCharge(player, context, chargeId, provider);
-    }
-
-    private void failContext(
-        Player player, DeploymentContext context, DeploymentFailureReason reason, String message
-    ) {
+    private void failContext(Player player, DeploymentContext context, DeploymentFailureReason reason, String message) {
         service.cancelDeployment(player.getUniqueId(), message, Instant.now());
-        player.sendMessage("§c" + message);
+        player.sendMessage("ERROR: " + message);
         plugin.getLogger().warning("[warsim-classes] deploymentRejected playerUuid="
             + player.getUniqueId() + " reason=" + reason + " matchId=" + context.matchId());
     }
@@ -500,15 +439,10 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
         service.mutableMetrics().weaponStatesReset.incrementAndGet();
     }
 
-    private Optional<Location> resolveWaitingSpawn() {
-        return safeLocation(deploymentConfiguration.waitingSpawn());
-    }
-
+    private Optional<Location> resolveWaitingSpawn() { return safeLocation(deploymentConfiguration.waitingSpawn()); }
     private Optional<Location> resolveSpawn(TeamSide side) {
-        DeploymentPaperConfiguration.SpawnPoint configured =
-            deploymentConfiguration.teamSpawns().get(side);
-        if (configured == null) return Optional.empty();
-        return safeLocation(configured);
+        DeploymentPaperConfiguration.SpawnPoint configured = deploymentConfiguration.teamSpawns().get(side);
+        return configured == null ? Optional.empty() : safeLocation(configured);
     }
 
     private Optional<Location> safeLocation(DeploymentPaperConfiguration.SpawnPoint spawn) {
@@ -524,9 +458,7 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
                 for (int dx = -r; dx <= r; dx++) {
                     for (int dz = -r; dz <= r; dz++) {
                         if (Math.max(Math.abs(dx), Math.abs(dz)) != r) continue;
-                        if (++checked > deploymentConfiguration.maximumSpawnCandidates()) {
-                            return Optional.empty();
-                        }
+                        if (++checked > deploymentConfiguration.maximumSpawnCandidates()) return Optional.empty();
                         Location candidate = center.clone().add(dx, dy, dz);
                         if (safe(candidate)) return Optional.of(candidate);
                     }
@@ -549,10 +481,7 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
             && !dangerous(feet.getType()) && !dangerous(head.getType()) && !dangerous(ground.getType());
     }
 
-    private static boolean passable(Block block) {
-        return block.isPassable() && block.getType() != Material.POWDER_SNOW;
-    }
-
+    private static boolean passable(Block block) { return block.isPassable() && block.getType() != Material.POWDER_SNOW; }
     private static boolean dangerous(Material material) {
         return material == Material.LAVA
             || material == Material.FIRE
@@ -572,8 +501,7 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
     private void createService(UUID matchId, long revision) {
         if (service != null) service.close();
         service = new DefaultCombatClassService(matchId, revision, classConfiguration,
-            exception -> plugin.getLogger().log(Level.WARNING,
-                "[warsim-classes] listener failed", exception));
+            exception -> plugin.getLogger().log(Level.WARNING, "[warsim-classes] listener failed", exception));
         if (classConfigurationError != null) {
             service.setDeploymentState(DeploymentSubsystemState.DEGRADED, classConfigurationError);
         }
@@ -592,12 +520,12 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
             return;
         }
         if (resolveWaitingSpawn().isEmpty()) {
-            service.setDeploymentState(DeploymentSubsystemState.SPAWN_INVALID, "waiting-spawn无效");
+            service.setDeploymentState(DeploymentSubsystemState.SPAWN_INVALID, "waiting-spawn is invalid");
             return;
         }
         CombatLoadoutProvisioningService provider = provider();
         if (provider == null || !provider.isAvailable()) {
-            service.setDeploymentState(DeploymentSubsystemState.WAITING_PROVIDER, "等待Weapons装备服务注册");
+            service.setDeploymentState(DeploymentSubsystemState.WAITING_PROVIDER, "Waiting for Weapons loadout service");
             return;
         }
         service.setDeploymentState(DeploymentSubsystemState.ACTIVE, null);
@@ -609,14 +537,8 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
         return registration == null ? null : registration.getProvider();
     }
 
-    private static UUID chargeOperationId(DeploymentContext context) {
-        return operationId(context, "RESPAWN_CHARGE");
-    }
-
-    private static UUID refundOperationId(DeploymentContext context) {
-        return operationId(context, "RESPAWN_REFUND");
-    }
-
+    private static UUID chargeOperationId(DeploymentContext context) { return operationId(context, "RESPAWN_CHARGE"); }
+    private static UUID refundOperationId(DeploymentContext context) { return operationId(context, "RESPAWN_REFUND"); }
     private static UUID operationId(DeploymentContext context, String type) {
         String value = context.matchId() + ":" + context.playerUuid() + ":"
             + context.deploymentRevision() + ":" + type;
@@ -628,14 +550,13 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
             .filter(player -> player.getName().equalsIgnoreCase(name))
             .toList();
         if (matches.size() != 1) {
-            sender.sendMessage("§c未找到唯一匹配的在线玩家。");
+            sender.sendMessage("ERROR: Expected exactly one online player match.");
             return null;
         }
         return matches.getFirst();
     }
 
-    @Override
-    public void close() {
+    @Override public void close() {
         if (closed) return;
         closed = true;
         HandlerList.unregisterAll(this);
@@ -646,27 +567,36 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
             try { registration.close(); } catch (Exception ignored) {}
         }
         commandRegistrations.clear();
+        preferences.clear();
         if (service != null) service.close();
+    }
+
+    private static final class DeploymentTransactionState {
+        private DeploymentContext context;
+        private CombatLoadoutProvisioningService provider;
+        private boolean loadoutPrepared;
+        private boolean ticketCharged;
+        private UUID chargeOperationId;
+        private boolean teleported;
+        private boolean loadoutGranted;
+        private boolean aliveCommitted;
+        private boolean rolledBack;
+        private DeploymentTransactionState(DeploymentContext context) { this.context = context; }
     }
 
     private final class ClassCommand implements WarSimCommandExtension {
         @Override public String name() { return "class"; }
-
-        @Override
-        public boolean execute(CommandSender sender, String[] arguments) {
+        @Override public boolean execute(CommandSender sender, String[] arguments) {
             if (arguments.length == 0) {
-                sender.sendMessage("§e用法：/warsim class <status|list|select|set|clear>");
+                sender.sendMessage("Usage: /warsim class <status|list|select|set|clear>");
                 return true;
             }
             String action = arguments[0].toLowerCase(java.util.Locale.ROOT);
             switch (action) {
                 case "status" -> {
-                    if (arguments.length == 1) {
-                        if (!(sender instanceof Player player)) {
-                            sender.sendMessage("§e用法：/warsim class status <玩家>");
-                        } else if (permission(sender, "warsim.player.class.status")) {
-                            classStatus(player, player);
-                        }
+                    if (arguments.length == 1 && sender instanceof Player player
+                        && permission(sender, "warsim.player.class.status")) {
+                        classStatus(player, player);
                     } else if (arguments.length == 2 && permission(sender, "warsim.admin.class.status")) {
                         Player target = exactPlayer(sender, arguments[1]);
                         if (target != null) classStatus(sender, target);
@@ -674,122 +604,113 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
                 }
                 case "list" -> {
                     if (permission(sender, "warsim.player.class.list")) {
-                        sender.sendMessage("§6可用兵种：");
+                        sender.sendMessage("Available classes:");
                         for (CombatClassDefinition definition : service.definitions()) {
-                            sender.sendMessage("§f- §a" + definition.classId().value()
-                                + " §7(" + definition.displayName() + ") limit="
-                                + definition.maximumPlayers());
+                            sender.sendMessage("- " + definition.classId().value()
+                                + " (" + definition.displayName() + ") limit=" + definition.maximumPlayers());
                         }
                     }
                 }
                 case "select" -> {
                     if (!(sender instanceof Player player)) {
-                        sender.sendMessage("§c该命令只能由玩家执行。");
+                        sender.sendMessage("ERROR: Player only command.");
                     } else if (arguments.length != 2) {
-                        sender.sendMessage("§e用法：/warsim class select <classId>");
+                        sender.sendMessage("Usage: /warsim class select <classId>");
                     } else if (permission(sender, "warsim.player.class.select")) {
                         CombatClassId id = new CombatClassId(arguments[1]);
                         preferences.put(player.getUniqueId(), id);
                         DeploymentResult result = service.selectClass(
                             player.getUniqueId(), matchCoordinator.snapshot().matchId(), id, Instant.now());
-                        player.sendMessage((result.successful() ? "§a" : "§c") + result.message());
+                        player.sendMessage((result.successful() ? "OK: " : "ERROR: ") + result.message());
                     }
                 }
                 case "set" -> {
                     if (arguments.length != 3) {
-                        sender.sendMessage("§e用法：/warsim class set <玩家> <classId>");
+                        sender.sendMessage("Usage: /warsim class set <player> <classId>");
                     } else if (permission(sender, "warsim.admin.class.set")) {
                         Player target = exactPlayer(sender, arguments[1]);
                         if (target != null) {
                             DeploymentResult result = service.selectClass(target.getUniqueId(),
                                 matchCoordinator.snapshot().matchId(), new CombatClassId(arguments[2]), Instant.now());
-                            sender.sendMessage((result.successful() ? "§a" : "§c") + result.message());
+                            sender.sendMessage((result.successful() ? "OK: " : "ERROR: ") + result.message());
                         }
                     }
                 }
                 case "clear" -> {
                     if (arguments.length != 2) {
-                        sender.sendMessage("§e用法：/warsim class clear <玩家>");
+                        sender.sendMessage("Usage: /warsim class clear <player>");
                     } else if (permission(sender, "warsim.admin.class.clear")) {
                         Player target = exactPlayer(sender, arguments[1]);
                         if (target != null) clearClass(sender, target);
                     }
                 }
-                default -> sender.sendMessage("§e用法：/warsim class <status|list|select|set|clear>");
+                default -> sender.sendMessage("Usage: /warsim class <status|list|select|set|clear>");
             }
             return true;
         }
-
         private void classStatus(CommandSender sender, Player target) {
             var selection = service.selection(target.getUniqueId());
-            sender.sendMessage("§6WarSim Class");
-            sender.sendMessage("§f玩家：§a" + target.getName());
-            sender.sendMessage("§f状态：§a" + selection.map(PlayerClassSelection::combatState).orElse(PlayerCombatState.NOT_DEPLOYED));
-            sender.sendMessage("§f当前兵种：§a" + selection.flatMap(PlayerClassSelection::currentClass).map(CombatClassId::value).orElse("无"));
-            sender.sendMessage("§f待切换兵种：§a" + selection.flatMap(PlayerClassSelection::pendingClass).map(CombatClassId::value).orElse("无"));
-            sender.sendMessage("§flifeRevision：§a" + selection.map(PlayerClassSelection::lifeRevision).orElse(0L));
+            sender.sendMessage("WarSim Class");
+            sender.sendMessage("player=" + target.getName());
+            sender.sendMessage("state=" + selection.map(PlayerClassSelection::combatState).orElse(PlayerCombatState.NOT_DEPLOYED));
+            sender.sendMessage("currentClass=" + selection.flatMap(PlayerClassSelection::currentClass).map(CombatClassId::value).orElse("none"));
+            sender.sendMessage("pendingClass=" + selection.flatMap(PlayerClassSelection::pendingClass).map(CombatClassId::value).orElse("none"));
+            sender.sendMessage("lifeRevision=" + selection.map(PlayerClassSelection::lifeRevision).orElse(0L));
         }
     }
 
     private final class DeployCommand implements WarSimCommandExtension {
         @Override public String name() { return "deploy"; }
-
-        @Override
-        public boolean execute(CommandSender sender, String[] arguments) {
+        @Override public boolean execute(CommandSender sender, String[] arguments) {
             if (!(sender instanceof Player player)) {
-                sender.sendMessage("§c该命令只能由玩家执行。");
+                sender.sendMessage("ERROR: Player only command.");
                 return true;
             }
             if (arguments.length == 1 && "cancel".equalsIgnoreCase(arguments[0])) {
                 if (permission(sender, "warsim.player.deploy.cancel")) {
                     DeploymentResult result = service.cancelDeployment(
-                        player.getUniqueId(), "玩家取消部署", Instant.now());
-                    player.sendMessage((result.successful() ? "§a" : "§c") + result.message());
+                        player.getUniqueId(), "Player cancelled deployment", Instant.now());
+                    player.sendMessage((result.successful() ? "OK: " : "ERROR: ") + result.message());
                 }
                 return true;
             }
-            if (!permission(sender, "warsim.player.deploy")) return true;
-            beginDeployment(player, DeploymentTrigger.MANUAL);
+            if (permission(sender, "warsim.player.deploy")) beginDeployment(player, DeploymentTrigger.MANUAL);
             return true;
         }
     }
 
     private final class DeploymentCommand implements WarSimCommandExtension {
         @Override public String name() { return "deployment"; }
-
-        @Override
-        public boolean execute(CommandSender sender, String[] arguments) {
+        @Override public boolean execute(CommandSender sender, String[] arguments) {
             if (arguments.length == 0) {
-                sender.sendMessage("§e用法：/warsim deployment <status|spawn|force>");
+                sender.sendMessage("Usage: /warsim deployment <status|spawn|force>");
                 return true;
             }
             String action = arguments[0].toLowerCase(java.util.Locale.ROOT);
             switch (action) {
                 case "status" -> {
-                    if (permission(sender, "warsim.admin.deployment.status")) {
-                        statusLines().forEach(sender::sendMessage);
-                    }
+                    if (permission(sender, "warsim.admin.deployment.status")) statusLines().forEach(sender::sendMessage);
                 }
                 case "spawn" -> {
                     if (arguments.length == 2 && "list".equalsIgnoreCase(arguments[1])
                         && permission(sender, "warsim.admin.deployment.spawn.list")) {
-                        sender.sendMessage("§6部署出生点");
-                        sender.sendMessage("§fwaiting-spawn：§a" + deploymentConfiguration.waitingSpawn());
-                        sender.sendMessage("§fattackers：§a" + deploymentConfiguration.teamSpawns().get(TeamSide.ATTACKERS));
-                        sender.sendMessage("§fdefenders：§a" + deploymentConfiguration.teamSpawns().get(TeamSide.DEFENDERS));
+                        sender.sendMessage("Deployment spawns:");
+                        sender.sendMessage("waiting-spawn=" + deploymentConfiguration.waitingSpawn());
+                        sender.sendMessage("attackers=" + deploymentConfiguration.teamSpawns().get(TeamSide.ATTACKERS));
+                        sender.sendMessage("defenders=" + deploymentConfiguration.teamSpawns().get(TeamSide.DEFENDERS));
                     } else {
-                        sender.sendMessage("§e用法：/warsim deployment spawn list");
+                        sender.sendMessage("Usage: /warsim deployment spawn list");
                     }
                 }
                 case "force" -> {
                     if (arguments.length != 2) {
-                        sender.sendMessage("§e用法：/warsim deployment force <玩家>");
+                        sender.sendMessage("Usage: /warsim deployment force <player>");
                     } else if (permission(sender, "warsim.admin.deployment.force")) {
                         Player target = exactPlayer(sender, arguments[1]);
                         if (target != null) beginDeployment(target, DeploymentTrigger.ADMIN_FORCE);
                     }
                 }
-                default -> sender.sendMessage("§e用法：/warsim deployment <status|spawn|force>");
+                default -> sender.sendMessage("Usage: /warsim deployment <status|spawn|force>");
             }
             return true;
         }
@@ -798,21 +719,21 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
     private void beginDeployment(Player player, DeploymentTrigger trigger) {
         refreshDeploymentProviderState();
         if (service.snapshot().classState() != ClassSubsystemState.ACTIVE) {
-            player.sendMessage("§c兵种系统当前不可用：" + service.snapshot().classState());
+            player.sendMessage("ERROR: Class system unavailable: " + service.snapshot().classState());
             return;
         }
         if (service.snapshot().deploymentState() != DeploymentSubsystemState.ACTIVE) {
-            player.sendMessage("§c部署系统当前不可用：" + service.snapshot().deploymentState());
+            player.sendMessage("ERROR: Deployment system unavailable: " + service.snapshot().deploymentState());
             return;
         }
         var match = matchCoordinator.snapshot();
         if (match.state() != MatchState.PLAYING) {
-            player.sendMessage("§c当前不在PLAYING状态，不能部署。");
+            player.sendMessage("ERROR: Match is not PLAYING; cannot deploy.");
             return;
         }
         var assignment = matchCoordinator.assignment(player.getUniqueId());
         if (assignment.isEmpty() || !assignment.get().connected()) {
-            player.sendMessage("§c没有有效阵营分配，不能部署。");
+            player.sendMessage("ERROR: No valid team assignment; cannot deploy.");
             return;
         }
         var selection = service.selection(player.getUniqueId());
@@ -820,14 +741,12 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
             && (selection.get().combatState() == PlayerCombatState.ALIVE
                 || selection.get().combatState() == PlayerCombatState.DEPLOYING
                 || selection.get().combatState() == PlayerCombatState.CLOSED)) {
-            player.sendMessage("搂c褰撳墠鐘舵€佷笉鑳介儴缃层€?");
+            player.sendMessage("ERROR: Current state cannot deploy.");
             return;
         }
-        CombatClassId requested = selection.flatMap(PlayerClassSelection::pendingClass)
-            .or(() -> selection.flatMap(PlayerClassSelection::currentClass))
-            .orElse(null);
+        CombatClassId requested = selection.flatMap(PlayerClassSelection::currentClass).orElse(null);
         if (requested == null) {
-            player.sendMessage("§c请先选择兵种。");
+            player.sendMessage("ERROR: Select a class first.");
             return;
         }
         DeploymentReason reason = selection.map(PlayerClassSelection::nextDeploymentReason)
@@ -839,7 +758,7 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
             assignment.get().teamSide(), reason, trigger, DeploymentSpawnType.TEAM_FIXED,
             Optional.of("team_fixed"), delay
         ), System.nanoTime(), Instant.now());
-        player.sendMessage((result.successful() ? "§e" : "§c") + result.message());
+        player.sendMessage((result.successful() ? "OK: " : "ERROR: ") + result.message());
     }
 
     private void clearClass(CommandSender sender, Player target) {
@@ -847,7 +766,7 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
         if (selection.isPresent() && selection.get().combatState() == PlayerCombatState.ALIVE) {
             Location waiting = resolveWaitingSpawn().orElse(null);
             if (waiting == null) {
-                sender.sendMessage("§cwaiting-spawn无效，无法安全清理ALIVE玩家兵种。");
+                sender.sendMessage("ERROR: waiting-spawn is invalid; cannot safely clear an ALIVE player class.");
                 return;
             }
             resetLifeState(target.getUniqueId(), selection.get().matchId(),
@@ -857,12 +776,13 @@ public final class PaperClassCoordinator implements Listener, BattleRuntimeListe
         }
         DeploymentResult result = service.clearClass(
             target.getUniqueId(), matchCoordinator.snapshot().matchId(), Instant.now());
-        sender.sendMessage((result.successful() ? "§a" : "§c") + result.message());
+        if (result.successful()) preferences.remove(target.getUniqueId());
+        sender.sendMessage((result.successful() ? "OK: " : "ERROR: ") + result.message());
     }
 
     private static boolean permission(CommandSender sender, String permission) {
         if (sender.hasPermission(permission)) return true;
-        sender.sendMessage("§c你没有权限执行该命令。");
+        sender.sendMessage("ERROR: You do not have permission for this command.");
         return false;
     }
 }

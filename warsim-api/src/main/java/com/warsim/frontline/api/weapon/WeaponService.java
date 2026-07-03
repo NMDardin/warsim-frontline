@@ -16,6 +16,13 @@ public interface WeaponService extends AutoCloseable {
         ShotContext context,
         java.util.function.Function<UUID, CombatRelation> relationResolver
     );
+    default ShotResult fire(
+        ShotContext context,
+        java.util.function.Function<UUID, CombatRelation> relationResolver,
+        WeaponDamagePolicy damagePolicy
+    ) {
+        return fire(context, relationResolver);
+    }
     WeaponOperationResult startReload(UUID playerUuid, UUID matchId, WeaponId weaponId, long nowNanos);
     int completeReloads(long nowNanos);
     boolean cancelReload(UUID playerUuid, UUID matchId, WeaponId weaponId);

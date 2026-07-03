@@ -1,6 +1,7 @@
 package com.warsim.frontline.weapons.paper;
 
 import com.warsim.frontline.api.battle.*;
+import com.warsim.frontline.api.combat.CombatPolicyService;
 import com.warsim.frontline.api.combat.FeedbackChannel;
 import com.warsim.frontline.api.combat.FeedbackMessage;
 import com.warsim.frontline.api.combat.FeedbackPriority;
@@ -158,9 +159,11 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
             new Vector3(eye.getX(), eye.getY(), eye.getZ()),
             direction, now, seed
         );
+        WeaponDamagePolicy damagePolicy = damagePolicy();
         ShotResult result = service.fire(
             new ShotContext(request, candidates, blockDistance),
-            target -> runtime.relation(shooter.getUniqueId(), target)
+            target -> runtime.relation(shooter.getUniqueId(), target),
+            damagePolicy
         );
         DamageApplicationResult damageResult = result.requestedDamage() > 0
             ? damage.apply(result) : DamageApplicationResult.NOT_APPLICABLE;
@@ -321,6 +324,13 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
         updateFeedback(player, definition, state);
     }
 
+    private WeaponDamagePolicy damagePolicy() {
+        RegisteredServiceProvider<CombatPolicyService> registration =
+            Bukkit.getServicesManager().getRegistration(CombatPolicyService.class);
+        boolean friendlyFire = registration != null && registration.getProvider().friendlyFireEnabled();
+        return new WeaponDamagePolicy(friendlyFire, configuration.core().allowSelfDamage());
+    }
+
     private void shotFeedback(Player player, ShotResult result) {
         shotFeedback(player, result, DamageApplicationResult.APPLIED);
     }
@@ -453,6 +463,7 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
             plugin.getLogger().log(Level.WARNING, "[warsim-weapons] Failed to unregister runtime subscription.", exception);
         }
         reloading.clear();
+        damage.close();
         attribution.close();
         feedback.close();
         service.close();

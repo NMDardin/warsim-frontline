@@ -70,9 +70,15 @@ final class WeaponConfigLoader {
                     ));
                 }
             }
+            if (yaml.isSet(root + "behavior.friendly-fire")) {
+                logger.warning(
+                    "[warsim-weapons] weapons.behavior.friendly-fire is deprecated and ignored; "
+                        + "use combat.friendly-fire.enabled in the main WarSimFrontline config."
+                );
+            }
             WeaponConfiguration core = new WeaponConfiguration(
                 yaml.getBoolean(root + "enabled", true),
-                yaml.getBoolean(root + "behavior.friendly-fire", false),
+                false,
                 yaml.getBoolean(root + "behavior.allow-self-damage", false),
                 yaml.getInt(root + "ballistics.maximum-candidates-per-shot", 100),
                 yaml.getDouble(root + "ballistics.maximum-range", 200),

@@ -107,8 +107,18 @@ public final class DefaultWeaponService implements WeaponService {
         ShotContext context,
         java.util.function.Function<UUID, CombatRelation> relationResolver
     ) {
+        return fire(context, relationResolver, WeaponDamagePolicy.failClosed());
+    }
+
+    @Override
+    public synchronized ShotResult fire(
+        ShotContext context,
+        java.util.function.Function<UUID, CombatRelation> relationResolver,
+        WeaponDamagePolicy damagePolicy
+    ) {
         long started = System.nanoTime();
         metrics.shotsRequested.incrementAndGet();
+        damagePolicy = damagePolicy == null ? WeaponDamagePolicy.failClosed() : damagePolicy;
         ShotRequest request = context.request();
         WeaponOperationResult allowed = canFire(
             request.shooterUuid(), request.matchId(), request.weaponId(),
@@ -141,6 +151,8 @@ public final class DefaultWeaponService implements WeaponService {
 
         ShotOutcome outcome;
         double requestedDamage = 0;
+        CombatRelation relation = CombatRelation.UNKNOWN;
+        boolean friendly = false;
         if (!hit.hit()) {
             if (context.blockHitDistance().isPresent()
                 && context.blockHitDistance().getAsDouble() <= definition.maximumRange()) {
@@ -151,10 +163,12 @@ public final class DefaultWeaponService implements WeaponService {
                 metrics.misses.incrementAndGet();
             }
         } else {
-            CombatRelation relation = relationResolver.apply(hit.targetUuid());
+            relation = relationResolver.apply(hit.targetUuid());
+            if (relation == null) relation = CombatRelation.UNKNOWN;
+            friendly = relation == CombatRelation.SQUADMATE || relation == CombatRelation.TEAMMATE;
             DamageResult calculated = damage.calculate(new DamageRequest(
                 definition, hit.distance(), hit.hitZone(), relation,
-                configuration.friendlyFire(), configuration.allowSelfDamage()
+                damagePolicy.friendlyFireEnabled(), damagePolicy.selfDamageEnabled()
             ));
             outcome = calculated.outcome();
             requestedDamage = calculated.damage();
@@ -168,7 +182,7 @@ public final class DefaultWeaponService implements WeaponService {
         }
         ShotResult result = new ShotResult(
             request, outcome, WeaponFailureReason.NONE, hit,
-            requestedDamage, runtime.snapshot()
+            requestedDamage, runtime.snapshot(), relation, friendly
         );
         Instant occurredAt = Instant.now();
         events.publish(new WeaponFiredEvent(

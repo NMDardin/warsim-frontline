@@ -1,4 +1,4 @@
-﻿node:
+node:
   id: "official-war-01"
   type: "OFFICIAL_BATTLE"
 
@@ -99,10 +99,10 @@ teams:
     deterministic-tie-break: true
   attackers:
     maximum-players: 50
-    display-name: "杩涙敾鏂?
+    display-name: "进攻方"
   defenders:
     maximum-players: 50
-    display-name: "闃插畧鏂?
+    display-name: "防守方"
 
 squads:
   enabled: true
@@ -121,12 +121,13 @@ squads:
     restore-assignment: true
     grace-seconds: 120
 
-# 娴嬭瘯鎹偣鍧愭爣锛涙寮忓湴鍥惧埗浣滄椂蹇呴』璋冩暣銆?objectives:
+# 测试据点坐标；正式地图制作时必须调整。
+objectives:
   enabled: true
   scan-interval-ticks: 5
   points:
     alpha:
-      display-name: "A鐐?
+      display-name: "A点"
       world: "world"
       center: { x: 0.5, y: 64.0, z: 0.5 }
       radius: 8.0
@@ -155,25 +156,25 @@ classes:
   configuration-revision: 1
   definitions:
     assault:
-      display-name: "绐佸嚮鍏?
+      display-name: "突击兵"
       maximum-players: 100
       equipment:
         primary-weapon: { type: "weapon", weapon-id: "test_rifle" }
         secondary-weapon: { type: "weapon", weapon-id: "test_pistol" }
     medic:
-      display-name: "鍖绘姢鍏?
+      display-name: "医护兵"
       maximum-players: 100
       equipment:
         primary-weapon: { type: "weapon", weapon-id: "test_rifle" }
         secondary-weapon: { type: "weapon", weapon-id: "test_pistol" }
     support:
-      display-name: "鏀彺鍏?
+      display-name: "支援兵"
       maximum-players: 100
       equipment:
         primary-weapon: { type: "weapon", weapon-id: "test_smg" }
         secondary-weapon: { type: "weapon", weapon-id: "test_pistol" }
     scout:
-      display-name: "渚﹀療鍏?
+      display-name: "侦察兵"
       maximum-players: 100
       equipment:
         primary-weapon: { type: "weapon", weapon-id: "test_rifle" }

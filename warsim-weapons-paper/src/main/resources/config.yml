@@ -6,7 +6,6 @@ weapons:
     cancel-vanilla-drop-when-reloading: true
     cancel-vanilla-interaction-when-armed: true
   behavior:
-    friendly-fire: false
     allow-self-damage: false
     require-playing-state: true
     require-active-participant: true

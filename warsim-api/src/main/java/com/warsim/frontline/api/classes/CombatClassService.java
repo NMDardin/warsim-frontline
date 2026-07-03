@@ -25,6 +25,8 @@ public interface CombatClassService extends CombatEligibilityService, AutoClosea
 
     DeploymentResult markAlive(DeploymentContext context, Instant now);
 
+    DeploymentResult revalidateDeploymentCapacity(DeploymentContext context, Instant now);
+
     DeploymentResult markDead(UUID playerUuid, UUID matchId, long lifeRevision, Instant now);
 
     DeploymentResult markWaitingDeployment(
