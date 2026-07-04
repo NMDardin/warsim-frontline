@@ -9,7 +9,7 @@ public record DestructionBlockSnapshot(
     String blockDataString,
     String materialName,
     UUID matchId,
-    long lifecycleRevision,
+    long capturedLifecycleRevision,
     long order,
     Instant capturedAt
 ) {

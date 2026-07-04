@@ -54,7 +54,8 @@ public final class PaperDestructionCoordinator implements Listener, BattleRuntim
     private long restoreSuccesses;
     private long restoreFailures;
     private UUID lastRestoreMatchId;
-    private long lastRestoreRevision;
+    private long lastRestoreContextRevision;
+    private long lastCapturedRevision;
     private long lastRestoreBlocks;
     private long lastRestoreDurationMillis;
     private String lastErrorSummary = "none";
@@ -195,7 +196,7 @@ public final class PaperDestructionCoordinator implements Listener, BattleRuntim
             battle.matchId(),
             ignored -> new MatchDestructionLedger(battle.matchId(), battle.lifecycleRevision())
         );
-        if (ledger.lifecycleRevision() != battle.lifecycleRevision()) {
+        if (!ledger.matchId().equals(battle.matchId())) {
             return false;
         }
         DestructionBlockKey key = new DestructionBlockKey(
@@ -227,7 +228,8 @@ public final class PaperDestructionCoordinator implements Listener, BattleRuntim
         Objects.requireNonNull(context, "context");
         restoreAttempts++;
         lastRestoreMatchId = context.matchId();
-        lastRestoreRevision = context.lifecycleRevision();
+        lastRestoreContextRevision = context.lifecycleRevision();
+        lastCapturedRevision = 0;
         lastRestoreBlocks = 0;
         Instant started = Instant.now();
         MatchDestructionLedger ledger;
@@ -240,15 +242,23 @@ public final class PaperDestructionCoordinator implements Listener, BattleRuntim
             lastErrorSummary = "none";
             return new MatchResetResult(true, "Destruction restore complete blocks=0");
         }
-        if (ledger.lifecycleRevision() != context.lifecycleRevision()) {
+        lastCapturedRevision = ledger.capturedLifecycleRevision();
+        if (!ledger.matchId().equals(context.matchId())) {
             restoreFailures++;
-            lastErrorSummary = "Destruction ledger revision mismatch";
+            lastErrorSummary = "Destruction ledger match mismatch";
             return MatchResetResult.failure(lastErrorSummary);
         }
         if (ledger.size() > configuration.maximumBlocksPerReset()) {
             restoreFailures++;
             lastErrorSummary = "maximum-blocks-per-reset exceeded";
             return MatchResetResult.failure(lastErrorSummary);
+        }
+        for (DestructionBlockSnapshot snapshot : ledger.snapshotsReverseOrder()) {
+            if (!snapshot.matchId().equals(context.matchId())) {
+                restoreFailures++;
+                lastErrorSummary = "Destruction snapshot match mismatch";
+                return MatchResetResult.failure(lastErrorSummary);
+            }
         }
 
         long restored = 0;
@@ -350,6 +360,8 @@ public final class PaperDestructionCoordinator implements Listener, BattleRuntim
                 + totalTileStateRejections + "/" + totalLimitRejections,
             "§fRestore attempts/success/failure: §a"
                 + restoreAttempts + "/" + restoreSuccesses + "/" + restoreFailures,
+            "§fRestore context/captured revision: §a"
+                + lastRestoreContextRevision + "/" + lastCapturedRevision,
             "§fLast restore blocks: §a" + lastRestoreBlocks,
             "§fLast error: §a" + lastErrorSummary
         );

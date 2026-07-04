@@ -62,6 +62,9 @@ or other block-entity internals.
 Block restore runs as a callback inside the existing T-013 `RESETTING`
 transaction after player evacuation and before transient entity cleanup. The
 reset service revalidates the Match context before and after the callback.
+Captured revisions are diagnostic: blocks are recorded during `PLAYING`, while
+restore runs under the later `RESETTING` revision, so restore ownership is
+validated by `matchId`.
 
 If the ledger has more entries than `maximum-blocks-per-reset`, restore fails
 closed before changing any blocks. Individual restore failures are logged with

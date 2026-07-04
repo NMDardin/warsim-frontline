@@ -7,22 +7,22 @@ import java.util.UUID;
 
 final class MatchDestructionLedger {
     private final UUID matchId;
-    private final long lifecycleRevision;
+    private final long capturedLifecycleRevision;
     private final LinkedHashMap<DestructionBlockKey, DestructionBlockSnapshot> snapshots =
         new LinkedHashMap<>();
     private long nextOrder;
 
-    MatchDestructionLedger(UUID matchId, long lifecycleRevision) {
+    MatchDestructionLedger(UUID matchId, long capturedLifecycleRevision) {
         this.matchId = Objects.requireNonNull(matchId, "matchId");
-        this.lifecycleRevision = lifecycleRevision;
+        this.capturedLifecycleRevision = capturedLifecycleRevision;
     }
 
     UUID matchId() {
         return matchId;
     }
 
-    long lifecycleRevision() {
-        return lifecycleRevision;
+    long capturedLifecycleRevision() {
+        return capturedLifecycleRevision;
     }
 
     int size() {
