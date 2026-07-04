@@ -1,9 +1,13 @@
 package com.warsim.frontline.weapons.paper;
 
 import com.warsim.frontline.admin.WarSimCommandExtension;
-import com.warsim.frontline.api.weapon.*;
+import com.warsim.frontline.api.weapon.WeaponDefinition;
+import com.warsim.frontline.api.weapon.WeaponId;
+import com.warsim.frontline.api.weapon.WeaponMetricsSnapshot;
 import com.warsim.frontline.weapons.DefaultWeaponService;
-import java.util.*;
+import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
@@ -16,7 +20,8 @@ final class WeaponCommandExtension implements WarSimCommandExtension {
     private final WeaponPaperConfiguration configuration;
 
     WeaponCommandExtension(
-        DefaultWeaponService service, CraftEngineWeaponGateway gateway,
+        DefaultWeaponService service,
+        CraftEngineWeaponGateway gateway,
         com.warsim.frontline.api.battle.WarSimBattleRuntime runtime,
         WeaponPaperConfiguration configuration
     ) {
@@ -31,7 +36,7 @@ final class WeaponCommandExtension implements WarSimCommandExtension {
     @Override
     public boolean execute(CommandSender sender, String[] args) {
         if (args.length == 0) {
-            sender.sendMessage("§e用法：/warsim weapon <status|list|give|ammo|refill|clear|inspect>");
+            usage(sender);
             return true;
         }
         String action = args[0].toLowerCase(Locale.ROOT);
@@ -44,19 +49,21 @@ final class WeaponCommandExtension implements WarSimCommandExtension {
             case "refill" -> refill(sender, args);
             case "clear" -> clear(sender, args);
             case "inspect" -> inspect(sender, args);
-            default -> sender.sendMessage(
-                "§e用法：/warsim weapon <status|list|give|ammo|refill|clear|inspect>"
-            );
+            default -> usage(sender);
         }
         return true;
     }
 
+    private void usage(CommandSender sender) {
+        sender.sendMessage("§e用法：/warsim weapon <status|list|give|ammo|refill|clear|inspect>");
+    }
+
     private void status(CommandSender sender) {
         WeaponMetricsSnapshot metrics = service.metrics();
-        sender.sendMessage("§6WarSim Weapons状态");
+        sender.sendMessage("§6WarSim Weapons 状态");
         sender.sendMessage("§f启用：§a" + configuration.core().enabled());
         sender.sendMessage("§f生命周期：§a" + service.state());
-        sender.sendMessage("§f当前Match：§a" + runtime.snapshot().matchId());
+        sender.sendMessage("§f当前 Match：§a" + runtime.snapshot().matchId());
         sender.sendMessage("§f已配置武器：§a" + metrics.configuredWeapons());
         sender.sendMessage("§f活动状态：§a" + metrics.activeWeaponStates());
         sender.sendMessage("§f射击请求/成功/拒绝：§a" + metrics.shotsRequested()
@@ -69,16 +76,13 @@ final class WeaponCommandExtension implements WarSimCommandExtension {
             sender.sendMessage("§f配置错误：§c" + configuration.error());
         }
         List<String> unavailable = gateway.unavailableBindings();
-        sender.sendMessage("§fCraftEngine绑定：§a"
+        sender.sendMessage("§fCraftEngine 绑定：§a"
             + (unavailable.isEmpty() ? "正常" : "缺失 " + unavailable));
     }
 
     private void list(CommandSender sender) {
-        sender.sendMessage("§6WarSim 测试武器");
-        service.definitions().forEach(definition -> sender.sendMessage(
-            "§f" + definition.weaponId() + " §7- §a" + definition.displayName()
-                + " §7(" + definition.craftEngineItemId() + ")"
-        ));
+        sender.sendMessage("§6WarSim 正式武器目录");
+        service.definitions().forEach(definition -> sender.sendMessage(summary(definition)));
     }
 
     private void give(CommandSender sender, String[] args) {
@@ -88,16 +92,11 @@ final class WeaponCommandExtension implements WarSimCommandExtension {
         }
         Player player = exact(sender, args[1]);
         if (player == null) return;
-        WeaponId id;
-        try {
-            id = new WeaponId(args[2].toLowerCase(Locale.ROOT));
-        } catch (IllegalArgumentException exception) {
-            sender.sendMessage("§c武器ID非法。");
-            return;
-        }
+        WeaponId id = parseWeaponId(sender, args[2]);
+        if (id == null) return;
         Optional<ItemStack> item = gateway.create(id, player);
         if (item.isEmpty()) {
-            sender.sendMessage("§cCraftEngine物品未加载或武器ID未知。");
+            sender.sendMessage("§cCraftEngine 物品未加载或武器 ID 未知。");
             return;
         }
         if (!player.getInventory().addItem(item.get()).isEmpty()) {
@@ -106,7 +105,7 @@ final class WeaponCommandExtension implements WarSimCommandExtension {
         }
         var battle = runtime.snapshot();
         if (battle.available()) service.refill(player.getUniqueId(), battle.matchId(), id);
-        sender.sendMessage("§a测试武器已发放。");
+        sender.sendMessage("§aWarSim 武器已发放。");
     }
 
     private void ammo(CommandSender sender, String[] args) {
@@ -133,9 +132,18 @@ final class WeaponCommandExtension implements WarSimCommandExtension {
         Player player = exact(sender, args[1]);
         if (player == null) return;
         var battle = runtime.snapshot();
-        List<WeaponDefinition> selected = args.length == 3
-            ? service.definition(new WeaponId(args[2].toLowerCase(Locale.ROOT))).stream().toList()
-            : service.definitions();
+        List<WeaponDefinition> selected;
+        if (args.length == 3) {
+            WeaponId id = parseWeaponId(sender, args[2]);
+            if (id == null) return;
+            selected = service.definition(id).stream().toList();
+            if (selected.isEmpty()) {
+                sender.sendMessage("§c未知武器 ID：" + id.value());
+                return;
+            }
+        } else {
+            selected = service.definitions();
+        }
         selected.forEach(definition ->
             service.refill(player.getUniqueId(), battle.matchId(), definition.weaponId()));
         sender.sendMessage("§a弹药已补满。");
@@ -152,19 +160,56 @@ final class WeaponCommandExtension implements WarSimCommandExtension {
             if (gateway.identify(item).isPresent()) player.getInventory().removeItem(item);
         }
         service.clearPlayer(player.getUniqueId());
-        sender.sendMessage("§aWarSim测试武器及状态已清理。");
+        sender.sendMessage("§aWarSim 武器和运行状态已清理。");
     }
 
     private void inspect(CommandSender sender, String[] args) {
+        if (args.length == 2) {
+            WeaponId id = parseWeaponId(sender, args[1]);
+            if (id == null) return;
+            service.definition(id).ifPresentOrElse(
+                definition -> inspectDefinition(sender, definition),
+                () -> sender.sendMessage("§c未知武器 ID：" + id.value())
+            );
+            return;
+        }
         if (!(sender instanceof Player player)) {
-            sender.sendMessage("§c该命令只能由玩家执行。");
+            sender.sendMessage("§c控制台检查配置时请使用：/warsim weapon inspect <weaponId>");
             return;
         }
         gateway.identify(player.getInventory().getItemInMainHand()).ifPresentOrElse(
-            id -> sender.sendMessage("§a主手CraftEngine武器："
-                + id + "，格式由CraftEngine 26.6.3验证。"),
-            () -> sender.sendMessage("§e主手不是已映射的WarSim测试武器。")
+            id -> sender.sendMessage("§a主手 CraftEngine 武器：" + id),
+            () -> sender.sendMessage("§e主手不是已映射的 WarSim 武器。")
         );
+    }
+
+    private void inspectDefinition(CommandSender sender, WeaponDefinition definition) {
+        sender.sendMessage("§6WarSim Weapon");
+        sender.sendMessage("§fID：§a" + definition.weaponId());
+        sender.sendMessage("§f名称：§a" + definition.displayName());
+        sender.sendMessage("§f类型：§a" + definition.category());
+        sender.sendMessage("§fCraftEngine：§a" + definition.craftEngineItemId());
+        sender.sendMessage("§f弹匣/备弹：§a" + definition.ammo().magazineSize()
+            + "/" + definition.ammo().reserveAmmo());
+        sender.sendMessage("§f换弹(ms)：§a" + definition.ammo().reloadMillis());
+        sender.sendMessage("§fRPM/射程/散布：§a" + definition.roundsPerMinute()
+            + "/" + definition.maximumRange() + "/" + definition.accuracy().hipSpreadDegrees());
+        sender.sendMessage("§f爆头倍率：§a" + definition.damage().headMultiplier());
+        sender.sendMessage("§f伤害曲线：§a" + definition.damage().points());
+        sender.sendMessage("§fEnabled：§atrue");
+    }
+
+    private static String summary(WeaponDefinition definition) {
+        var points = definition.damage().points();
+        double firstDamage = points.getFirst().damage();
+        double lastDamage = points.getLast().damage();
+        return "§f" + definition.weaponId() + " §7- §a" + definition.displayName()
+            + " §7type=" + definition.category()
+            + " mag=" + definition.ammo().magazineSize()
+            + "/" + definition.ammo().reserveAmmo()
+            + " damage=" + firstDamage + "->" + lastDamage
+            + " item=" + definition.craftEngineItemId()
+            + " enabled=true";
     }
 
     @Override
@@ -174,10 +219,12 @@ final class WeaponCommandExtension implements WarSimCommandExtension {
                 .stream().filter(value -> value.startsWith(args[0].toLowerCase(Locale.ROOT)))
                 .toList();
         }
-        if (args.length == 3 && ("give".equalsIgnoreCase(args[0])
-            || "refill".equalsIgnoreCase(args[0]))) {
+        if ((args.length == 2 && "inspect".equalsIgnoreCase(args[0]))
+            || (args.length == 3 && ("give".equalsIgnoreCase(args[0])
+                || "refill".equalsIgnoreCase(args[0])))) {
+            String prefix = args[args.length - 1].toLowerCase(Locale.ROOT);
             return service.definitions().stream().map(value -> value.weaponId().value())
-                .filter(value -> value.startsWith(args[2].toLowerCase(Locale.ROOT))).toList();
+                .filter(value -> value.startsWith(prefix)).toList();
         }
         return List.of();
     }
@@ -196,5 +243,14 @@ final class WeaponCommandExtension implements WarSimCommandExtension {
             return null;
         }
         return matches.getFirst();
+    }
+
+    private static WeaponId parseWeaponId(CommandSender sender, String raw) {
+        try {
+            return new WeaponId(raw.toLowerCase(Locale.ROOT));
+        } catch (IllegalArgumentException exception) {
+            sender.sendMessage("§c武器 ID 非法。");
+            return null;
+        }
     }
 }

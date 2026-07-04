@@ -1,5 +1,18 @@
 # WarSim: Frontline
 
+## T-016 Formal Infantry Weapons
+
+T-016 adds the first formal infantry weapon catalog to the independent
+`WarSimFrontlineWeapons` Paper plugin. Official class loadouts now reference
+`wrench_m1895_rifle`, `wrench_m1911_pistol`, `wrench_m1918_smg`, and
+`wrench_m1903_marksman`; `test_rifle`, `test_pistol`, and `test_smg` remain only
+as development compatibility definitions.
+
+CraftEngine templates and placeholder model JSON files are included for the six
+formal IDs, but this does not ship final resource-pack art, artillery, vehicles,
+explosive weapons, automatic-fire mechanics, or client acceptance results. See
+[`docs/WEAPONS.md`](docs/WEAPONS.md).
+
 ## T-015 Objective Sectors
 
 T-015 adds ordered Objective Sectors for the official battle flow. Only the
@@ -62,9 +75,9 @@ Official Battle 部署时同时安装主插件、Weapons 插件和 CraftEngine 2
 - 切换离开正在装填的武器：取消装填且不消耗备弹。
 
 管理员命令为 `/warsim weapon status|list|give|ammo|refill|clear|inspect`。
-测试定义为 `test_rifle`、`test_pistol` 和 `test_smg`，均只支持点击触发
-`SEMI_AUTO`。客户端人工验收仍包括模型显示、真实玩家发放、射击、装填、
-AABB命中、方块遮挡、友军阻止、ActionBar、实际伤害与击杀提示。
+T-016 起 Official 默认使用正式武器 ID；`test_*` 定义仅保留为开发兼容项。
+客户端人工验收仍包括模型显示、真实玩家发放、射击、装填、AABB 命中、
+方块遮挡、友军阻止、ActionBar、实际伤害与击杀提示。
 
 ## T-007 据点与兵力票数
 

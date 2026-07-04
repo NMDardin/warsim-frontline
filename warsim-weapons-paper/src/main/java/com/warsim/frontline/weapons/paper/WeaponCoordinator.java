@@ -242,7 +242,7 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
             plugin.getLogger().info("[warsim-weapons] CraftEngine weapon bindings verified.");
         } else {
             plugin.getLogger().warning(
-                "[warsim-weapons] CraftEngine is missing test weapon items: " + unavailable
+                "[warsim-weapons] CraftEngine is missing configured weapon items: " + unavailable
             );
         }
     }

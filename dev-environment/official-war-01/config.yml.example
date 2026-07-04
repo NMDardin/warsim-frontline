@@ -284,26 +284,26 @@ classes:
       display-name: "突击兵"
       maximum-players: 100
       equipment:
-        primary-weapon: { type: "weapon", weapon-id: "test_rifle" }
-        secondary-weapon: { type: "weapon", weapon-id: "test_pistol" }
+        primary-weapon: { type: "weapon", weapon-id: "wrench_m1895_rifle" }
+        secondary-weapon: { type: "weapon", weapon-id: "wrench_m1911_pistol" }
     medic:
       display-name: "医护兵"
       maximum-players: 100
       equipment:
-        primary-weapon: { type: "weapon", weapon-id: "test_rifle" }
-        secondary-weapon: { type: "weapon", weapon-id: "test_pistol" }
+        primary-weapon: { type: "weapon", weapon-id: "wrench_m1895_rifle" }
+        secondary-weapon: { type: "weapon", weapon-id: "wrench_m1911_pistol" }
     support:
       display-name: "支援兵"
       maximum-players: 100
       equipment:
-        primary-weapon: { type: "weapon", weapon-id: "test_smg" }
-        secondary-weapon: { type: "weapon", weapon-id: "test_pistol" }
+        primary-weapon: { type: "weapon", weapon-id: "wrench_m1918_smg" }
+        secondary-weapon: { type: "weapon", weapon-id: "wrench_m1911_pistol" }
     scout:
       display-name: "侦察兵"
       maximum-players: 100
       equipment:
-        primary-weapon: { type: "weapon", weapon-id: "test_rifle" }
-        secondary-weapon: { type: "weapon", weapon-id: "test_pistol" }
+        primary-weapon: { type: "weapon", weapon-id: "wrench_m1903_marksman" }
+        secondary-weapon: { type: "weapon", weapon-id: "wrench_m1911_pistol" }
 
 deployment:
   enabled: true

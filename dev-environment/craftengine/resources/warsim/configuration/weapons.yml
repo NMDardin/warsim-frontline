@@ -1,22 +1,66 @@
 items:
+  warsim:wrench_m1895_rifle:
+    material: iron_horse_armor
+    data:
+      item_name: "<!i><white>Wrench M1895 Rifle"
+      lore:
+        - "<!i><gray>WarSim formal weapon placeholder"
+    model: warsim:item/wrench_m1895_rifle
+  warsim:wrench_m1911_pistol:
+    material: golden_horse_armor
+    data:
+      item_name: "<!i><white>Wrench M1911 Pistol"
+      lore:
+        - "<!i><gray>WarSim formal weapon placeholder"
+    model: warsim:item/wrench_m1911_pistol
+  warsim:wrench_m1918_smg:
+    material: diamond_horse_armor
+    data:
+      item_name: "<!i><white>Wrench M1918 SMG"
+      lore:
+        - "<!i><gray>WarSim formal weapon placeholder"
+    model: warsim:item/wrench_m1918_smg
+  warsim:wrench_m1915_lmg:
+    material: netherite_horse_armor
+    data:
+      item_name: "<!i><white>Wrench M1915 LMG"
+      lore:
+        - "<!i><gray>WarSim formal weapon placeholder"
+    model: warsim:item/wrench_m1915_lmg
+  warsim:wrench_m1897_shotgun:
+    material: leather_horse_armor
+    data:
+      item_name: "<!i><white>Wrench M1897 Shotgun"
+      lore:
+        - "<!i><gray>WarSim formal weapon placeholder"
+    model: warsim:item/wrench_m1897_shotgun
+  warsim:wrench_m1903_marksman:
+    material: iron_horse_armor
+    data:
+      item_name: "<!i><white>Wrench M1903 Marksman"
+      lore:
+        - "<!i><gray>WarSim formal weapon placeholder"
+    model: warsim:item/wrench_m1903_marksman
+
+  # Development compatibility only. Official class loadouts do not reference these IDs.
   warsim:test_rifle:
     material: iron_horse_armor
     data:
-      item_name: "<!i><white>测试步枪"
+      item_name: "<!i><white>Dev Test Rifle"
       lore:
-        - "<!i><gray>WarSim T-008 测试物品"
+        - "<!i><gray>WarSim development compatibility item"
     model: warsim:item/test_rifle
   warsim:test_pistol:
     material: golden_horse_armor
     data:
-      item_name: "<!i><white>测试手枪"
+      item_name: "<!i><white>Dev Test Pistol"
       lore:
-        - "<!i><gray>WarSim T-008 测试物品"
+        - "<!i><gray>WarSim development compatibility item"
     model: warsim:item/test_pistol
   warsim:test_smg:
     material: diamond_horse_armor
     data:
-      item_name: "<!i><white>测试冲锋枪"
+      item_name: "<!i><white>Dev Test SMG"
       lore:
-        - "<!i><gray>WarSim T-008 测试物品"
+        - "<!i><gray>WarSim development compatibility item"
     model: warsim:item/test_smg

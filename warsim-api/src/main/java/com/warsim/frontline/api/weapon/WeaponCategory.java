@@ -1,3 +1,3 @@
 package com.warsim.frontline.api.weapon;
 
-public enum WeaponCategory { RIFLE, PISTOL, SMG }
+public enum WeaponCategory { RIFLE, PISTOL, SMG, LMG, SHOTGUN, MARKSMAN }

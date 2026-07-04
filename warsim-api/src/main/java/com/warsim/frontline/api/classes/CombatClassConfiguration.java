@@ -28,13 +28,13 @@ public record CombatClassConfiguration(
     public static CombatClassConfiguration defaults(boolean enabled) {
         return new CombatClassConfiguration(enabled, 1, List.of(
             new CombatClassDefinition(CombatClassId.ASSAULT, "突击兵", 100,
-                defaultWeapons("test_rifle", "test_pistol")),
+                defaultWeapons("wrench_m1895_rifle", "wrench_m1911_pistol")),
             new CombatClassDefinition(CombatClassId.MEDIC, "医护兵", 100,
-                defaultWeapons("test_rifle", "test_pistol")),
+                defaultWeapons("wrench_m1895_rifle", "wrench_m1911_pistol")),
             new CombatClassDefinition(CombatClassId.SUPPORT, "支援兵", 100,
-                defaultWeapons("test_smg", "test_pistol")),
+                defaultWeapons("wrench_m1918_smg", "wrench_m1911_pistol")),
             new CombatClassDefinition(CombatClassId.SCOUT, "侦察兵", 100,
-                defaultWeapons("test_rifle", "test_pistol"))
+                defaultWeapons("wrench_m1903_marksman", "wrench_m1911_pistol"))
         ));
     }
 

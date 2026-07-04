@@ -20,8 +20,88 @@ weapons:
     reload-check-interval-ticks: 2
     disconnect-retention-seconds: 0
   definitions:
+    wrench_m1895_rifle:
+      display-name: "Wrench M1895 Rifle"
+      category: "RIFLE"
+      fire-mode: "SEMI_AUTO"
+      craftengine-item-id: "warsim:wrench_m1895_rifle"
+      ammo: { magazine-size: 5, reserve-ammo: 40, reload-millis: 2600 }
+      firing: { rounds-per-minute: 55, maximum-range: 180.0, hip-spread-degrees: 0.30 }
+      damage:
+        head-multiplier: 1.8
+        points:
+          - { distance: 0.0, damage: 38.0 }
+          - { distance: 90.0, damage: 34.0 }
+          - { distance: 180.0, damage: 22.0 }
+    wrench_m1911_pistol:
+      display-name: "Wrench M1911 Pistol"
+      category: "PISTOL"
+      fire-mode: "SEMI_AUTO"
+      craftengine-item-id: "warsim:wrench_m1911_pistol"
+      ammo: { magazine-size: 7, reserve-ammo: 35, reload-millis: 1700 }
+      firing: { rounds-per-minute: 240, maximum-range: 80.0, hip-spread-degrees: 0.85 }
+      damage:
+        head-multiplier: 1.5
+        points:
+          - { distance: 0.0, damage: 24.0 }
+          - { distance: 40.0, damage: 20.0 }
+          - { distance: 80.0, damage: 12.0 }
+    wrench_m1918_smg:
+      display-name: "Wrench M1918 SMG"
+      category: "SMG"
+      fire-mode: "SEMI_AUTO"
+      craftengine-item-id: "warsim:wrench_m1918_smg"
+      ammo: { magazine-size: 20, reserve-ammo: 100, reload-millis: 2200 }
+      firing: { rounds-per-minute: 450, maximum-range: 70.0, hip-spread-degrees: 1.45 }
+      damage:
+        head-multiplier: 1.35
+        points:
+          - { distance: 0.0, damage: 19.0 }
+          - { distance: 35.0, damage: 15.0 }
+          - { distance: 70.0, damage: 9.0 }
+    wrench_m1915_lmg:
+      display-name: "Wrench M1915 LMG"
+      category: "LMG"
+      fire-mode: "SEMI_AUTO"
+      craftengine-item-id: "warsim:wrench_m1915_lmg"
+      ammo: { magazine-size: 30, reserve-ammo: 120, reload-millis: 3500 }
+      firing: { rounds-per-minute: 350, maximum-range: 120.0, hip-spread-degrees: 1.0 }
+      damage:
+        head-multiplier: 1.45
+        points:
+          - { distance: 0.0, damage: 26.0 }
+          - { distance: 60.0, damage: 22.0 }
+          - { distance: 120.0, damage: 14.0 }
+    wrench_m1897_shotgun:
+      display-name: "Wrench M1897 Shotgun"
+      category: "SHOTGUN"
+      fire-mode: "SEMI_AUTO"
+      craftengine-item-id: "warsim:wrench_m1897_shotgun"
+      ammo: { magazine-size: 5, reserve-ammo: 30, reload-millis: 2800 }
+      firing: { rounds-per-minute: 70, maximum-range: 45.0, hip-spread-degrees: 2.5 }
+      damage:
+        head-multiplier: 1.2
+        points:
+          - { distance: 0.0, damage: 52.0 }
+          - { distance: 22.5, damage: 32.0 }
+          - { distance: 45.0, damage: 12.0 }
+    wrench_m1903_marksman:
+      display-name: "Wrench M1903 Marksman"
+      category: "MARKSMAN"
+      fire-mode: "SEMI_AUTO"
+      craftengine-item-id: "warsim:wrench_m1903_marksman"
+      ammo: { magazine-size: 5, reserve-ammo: 35, reload-millis: 2800 }
+      firing: { rounds-per-minute: 45, maximum-range: 200.0, hip-spread-degrees: 0.18 }
+      damage:
+        head-multiplier: 2.0
+        points:
+          - { distance: 0.0, damage: 45.0 }
+          - { distance: 120.0, damage: 42.0 }
+          - { distance: 200.0, damage: 30.0 }
+
+    # Development compatibility only. Official class loadouts must not reference these IDs.
     test_rifle:
-      display-name: "测试步枪"
+      display-name: "Dev Test Rifle"
       category: "RIFLE"
       fire-mode: "SEMI_AUTO"
       craftengine-item-id: "warsim:test_rifle"
@@ -34,7 +114,7 @@ weapons:
           - { distance: 80.0, damage: 34.0 }
           - { distance: 160.0, damage: 20.0 }
     test_pistol:
-      display-name: "测试手枪"
+      display-name: "Dev Test Pistol"
       category: "PISTOL"
       fire-mode: "SEMI_AUTO"
       craftengine-item-id: "warsim:test_pistol"
@@ -47,7 +127,7 @@ weapons:
           - { distance: 40.0, damage: 20.0 }
           - { distance: 80.0, damage: 12.0 }
     test_smg:
-      display-name: "测试冲锋枪"
+      display-name: "Dev Test SMG"
       category: "SMG"
       fire-mode: "SEMI_AUTO"
       craftengine-item-id: "warsim:test_smg"

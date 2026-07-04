@@ -1,6 +1,14 @@
 package com.warsim.frontline.weapons.paper;
 
-import com.warsim.frontline.api.weapon.*;
+import com.warsim.frontline.api.weapon.AccuracyConfiguration;
+import com.warsim.frontline.api.weapon.AmmoConfiguration;
+import com.warsim.frontline.api.weapon.DamageConfiguration;
+import com.warsim.frontline.api.weapon.FireMode;
+import com.warsim.frontline.api.weapon.RangeDamagePoint;
+import com.warsim.frontline.api.weapon.WeaponCategory;
+import com.warsim.frontline.api.weapon.WeaponConfiguration;
+import com.warsim.frontline.api.weapon.WeaponDefinition;
+import com.warsim.frontline.api.weapon.WeaponId;
 import java.io.File;
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -33,41 +41,7 @@ final class WeaponConfigLoader {
             ConfigurationSection section = yaml.getConfigurationSection(root + "definitions");
             if (section != null) {
                 for (String id : section.getKeys(false).stream().sorted().toList()) {
-                    String path = root + "definitions." + id + ".";
-                    List<?> rawPoints = yaml.getList(path + "damage.points", List.of());
-                    ArrayList<RangeDamagePoint> points = new ArrayList<>();
-                    for (Object value : rawPoints) {
-                        if (!(value instanceof java.util.Map<?, ?> map)) {
-                            throw new IllegalArgumentException("Invalid damage point for " + id);
-                        }
-                        points.add(new RangeDamagePoint(
-                            number(map.get("distance")), number(map.get("damage"))
-                        ));
-                    }
-                    definitions.add(new WeaponDefinition(
-                        new WeaponId(id),
-                        yaml.getString(path + "display-name", id),
-                        WeaponCategory.valueOf(yaml.getString(
-                            path + "category", "RIFLE"
-                        ).toUpperCase(Locale.ROOT)),
-                        FireMode.valueOf(yaml.getString(
-                            path + "fire-mode", "SEMI_AUTO"
-                        ).toUpperCase(Locale.ROOT)),
-                        yaml.getString(path + "craftengine-item-id", ""),
-                        new AmmoConfiguration(
-                            yaml.getInt(path + "ammo.magazine-size"),
-                            yaml.getInt(path + "ammo.reserve-ammo"),
-                            yaml.getLong(path + "ammo.reload-millis")
-                        ),
-                        yaml.getInt(path + "firing.rounds-per-minute"),
-                        yaml.getDouble(path + "firing.maximum-range"),
-                        new AccuracyConfiguration(
-                            yaml.getDouble(path + "firing.hip-spread-degrees")
-                        ),
-                        new DamageConfiguration(
-                            yaml.getDouble(path + "damage.head-multiplier"), points
-                        )
-                    ));
+                    definitions.add(loadDefinition(yaml, root, id));
                 }
             }
             if (yaml.isSet(root + "behavior.friendly-fire")) {
@@ -97,12 +71,54 @@ final class WeaponConfigLoader {
         } catch (RuntimeException | java.io.IOException exception) {
             logger.log(
                 Level.SEVERE,
-                "[warsim-weapons] 武器配置无效，仅独立武器插件进入FAILED。",
+                "[warsim-weapons] Weapon configuration is invalid; only the independent Weapons plugin enters FAILED.",
                 exception
             );
             return new WeaponPaperConfiguration(
                 WeaponConfiguration.disabled(), true, true, exception.getMessage()
             );
+        }
+    }
+
+    private static WeaponDefinition loadDefinition(YamlConfiguration yaml, String root, String id) {
+        try {
+            String path = root + "definitions." + id + ".";
+            List<?> rawPoints = yaml.getList(path + "damage.points", List.of());
+            ArrayList<RangeDamagePoint> points = new ArrayList<>();
+            for (Object value : rawPoints) {
+                if (!(value instanceof java.util.Map<?, ?> map)) {
+                    throw new IllegalArgumentException("Invalid damage point");
+                }
+                points.add(new RangeDamagePoint(
+                    number(map.get("distance")), number(map.get("damage"))
+                ));
+            }
+            return new WeaponDefinition(
+                new WeaponId(id),
+                yaml.getString(path + "display-name", id),
+                WeaponCategory.valueOf(yaml.getString(
+                    path + "category", "RIFLE"
+                ).toUpperCase(Locale.ROOT)),
+                FireMode.valueOf(yaml.getString(
+                    path + "fire-mode", "SEMI_AUTO"
+                ).toUpperCase(Locale.ROOT)),
+                yaml.getString(path + "craftengine-item-id", ""),
+                new AmmoConfiguration(
+                    yaml.getInt(path + "ammo.magazine-size"),
+                    yaml.getInt(path + "ammo.reserve-ammo"),
+                    yaml.getLong(path + "ammo.reload-millis")
+                ),
+                yaml.getInt(path + "firing.rounds-per-minute"),
+                yaml.getDouble(path + "firing.maximum-range"),
+                new AccuracyConfiguration(
+                    yaml.getDouble(path + "firing.hip-spread-degrees")
+                ),
+                new DamageConfiguration(
+                    yaml.getDouble(path + "damage.head-multiplier"), points
+                )
+            );
+        } catch (RuntimeException exception) {
+            throw new IllegalArgumentException("Invalid weapon definition: " + id, exception);
         }
     }
 
