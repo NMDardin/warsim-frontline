@@ -1,5 +1,15 @@
 # WarSim: Frontline
 
+## T-017 Resource Pack Delivery
+
+T-017 adds the base resource-pack manifest, content-version validation,
+resource-pack config, player status tracking, and `/warsim resourcepack`
+diagnostics. The bundled manifest records the six formal T-016 weapon item/model
+IDs and keeps old `test_*` entries as optional development compatibility.
+
+This does not generate a final zip, publish a URL, compute a remote hash, ship
+final art, or claim client validation. See [`docs/RESOURCEPACK.md`](docs/RESOURCEPACK.md).
+
 ## T-016 Formal Infantry Weapons
 
 T-016 adds the first formal infantry weapon catalog to the independent

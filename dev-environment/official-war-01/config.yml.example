@@ -13,6 +13,26 @@ integrations:
     enabled: true
     required: false
 
+resource-pack:
+  enabled: true
+  content-version: "t017-formal-weapons-placeholder"
+  pack:
+    # Local development does not send packs automatically. Configure URL/SHA-1 for release validation.
+    url: ""
+    sha1: ""
+    required: false
+    prompt: "WarSim Frontline uses a resource pack for weapon and UI placeholders."
+  validation:
+    enabled: true
+    fail-closed-on-invalid-manifest: false
+    expected-namespace: "warsim"
+    require-formal-weapon-items: true
+    require-placeholder-models: true
+  send:
+    on-join: false
+    delay-ticks: 40
+    resend-on-status-failed: false
+
 database:
   enabled: false
   jdbc-url: "jdbc:postgresql://127.0.0.1:5432/warsim_frontline"

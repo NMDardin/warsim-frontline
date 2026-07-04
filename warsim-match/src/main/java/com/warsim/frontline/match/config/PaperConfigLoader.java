@@ -14,6 +14,7 @@ import com.warsim.frontline.database.config.DatabaseEnvironmentOverrides;
 import com.warsim.frontline.destruction.DestructionPaperConfiguration;
 import com.warsim.frontline.destruction.DestructionProtectedRegion;
 import com.warsim.frontline.match.performance.PerformanceConfiguration;
+import com.warsim.frontline.match.resourcepack.ResourcePackPaperConfiguration;
 import com.warsim.frontline.network.redis.RedisConfiguration;
 import com.warsim.frontline.network.redis.RedisEnvironmentOverrides;
 import java.io.File;
@@ -283,6 +284,19 @@ public final class PaperConfigLoader {
                     exception
                 );
             }
+            ResourcePackPaperConfiguration resourcePackConfiguration;
+            String resourcePackConfigurationError = null;
+            try {
+                resourcePackConfiguration = loadResourcePackConfiguration(yaml);
+            } catch (RuntimeException exception) {
+                resourcePackConfiguration = ResourcePackPaperConfiguration.disabled();
+                resourcePackConfigurationError = exception.getMessage();
+                logger.log(
+                    Level.SEVERE,
+                    "[warsim-resourcepack] Resource pack configuration is invalid; only resourcepack diagnostics are disabled.",
+                    exception
+                );
+            }
             PerformanceConfiguration performanceConfiguration;
             String performanceConfigurationError = null;
             try {
@@ -421,6 +435,8 @@ public final class PaperConfigLoader {
                 ticketConfigurationError,
                 destructionConfiguration,
                 destructionConfigurationError,
+                resourcePackConfiguration,
+                resourcePackConfigurationError,
                 performanceConfiguration,
                 performanceConfigurationError,
                 classConfiguration,
@@ -556,6 +572,37 @@ public final class PaperConfigLoader {
             throw new IllegalArgumentException("Official Battle requires destruction.enabled=true");
         }
         return configuration;
+    }
+
+    private static ResourcePackPaperConfiguration loadResourcePackConfiguration(
+        YamlConfiguration yaml
+    ) {
+        boolean enabled = yaml.getBoolean("resource-pack.enabled", true);
+        return new ResourcePackPaperConfiguration(
+            enabled,
+            yaml.getString("resource-pack.content-version", "t017-formal-weapons-placeholder"),
+            new ResourcePackPaperConfiguration.Pack(
+                yaml.getString("resource-pack.pack.url", ""),
+                yaml.getString("resource-pack.pack.sha1", ""),
+                yaml.getBoolean("resource-pack.pack.required", false),
+                yaml.getString(
+                    "resource-pack.pack.prompt",
+                    "WarSim Frontline uses a resource pack for weapon and UI placeholders."
+                )
+            ),
+            new ResourcePackPaperConfiguration.Validation(
+                yaml.getBoolean("resource-pack.validation.enabled", true),
+                yaml.getBoolean("resource-pack.validation.fail-closed-on-invalid-manifest", false),
+                yaml.getString("resource-pack.validation.expected-namespace", "warsim"),
+                yaml.getBoolean("resource-pack.validation.require-formal-weapon-items", true),
+                yaml.getBoolean("resource-pack.validation.require-placeholder-models", true)
+            ),
+            new ResourcePackPaperConfiguration.Send(
+                yaml.getBoolean("resource-pack.send.on-join", false),
+                yaml.getInt("resource-pack.send.delay-ticks", 40),
+                yaml.getBoolean("resource-pack.send.resend-on-status-failed", false)
+            )
+        );
     }
 
     private static ObjectiveSectorConfiguration loadObjectiveSectorConfiguration(

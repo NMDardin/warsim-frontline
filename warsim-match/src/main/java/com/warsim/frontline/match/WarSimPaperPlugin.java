@@ -24,6 +24,7 @@ import com.warsim.frontline.match.loadtest.LoadMapCommandExtension;
 import com.warsim.frontline.match.performance.DefaultPerformanceService;
 import com.warsim.frontline.match.performance.PerformanceCommandExtension;
 import com.warsim.frontline.match.performance.PerformanceConfiguration;
+import com.warsim.frontline.match.resourcepack.PaperResourcePackCoordinator;
 import com.warsim.frontline.match.redis.PaperNodePublication;
 import com.warsim.frontline.match.session.LocalSessionRegistry;
 import com.warsim.frontline.match.redis.PaperRedisCoordinator;
@@ -81,6 +82,7 @@ public final class WarSimPaperPlugin extends JavaPlugin implements
     private PaperClassCoordinator classCoordinator;
     private CombatOutcomeCoordinator combatCoordinator;
     private PaperDestructionCoordinator destructionCoordinator;
+    private PaperResourcePackCoordinator resourcePackCoordinator;
     private PaperBattleRuntime battleRuntime;
     private WarSimCommandRegistry commandRegistry;
     private DefaultPerformanceService performanceService;
@@ -134,6 +136,12 @@ public final class WarSimPaperPlugin extends JavaPlugin implements
         config = loadedConfig;
         performanceService.configure(config.performance(), config.node().id());
         commandRegistry.register(new PerformanceCommandExtension(performanceService));
+        resourcePackCoordinator = new PaperResourcePackCoordinator(
+            this,
+            config.resourcePack(),
+            config.resourcePackConfigurationError()
+        );
+        resourcePackCoordinator.start(commandRegistry);
         loadScenarioService = new DefaultLoadScenarioService(
             this,
             config.node().type() == NodeType.OFFICIAL_BATTLE,
@@ -284,6 +292,9 @@ public final class WarSimPaperPlugin extends JavaPlugin implements
         }
         if (destructionCoordinator != null) {
             destructionCoordinator.close();
+        }
+        if (resourcePackCoordinator != null) {
+            resourcePackCoordinator.close();
         }
         if (battleRuntime != null) {
             battleRuntime.close();
@@ -441,6 +452,9 @@ public final class WarSimPaperPlugin extends JavaPlugin implements
             lines.add("§fLoadMap状态：§a" + loadMap.state());
             lines.add("§fLoadMap准备场景：§a"
                 + (loadMap.preparedScenarioId() == null ? "无" : loadMap.preparedScenarioId()));
+        }
+        if (resourcePackCoordinator != null) {
+            lines.addAll(resourcePackCoordinator.statusLines());
         }
         if (classCoordinator != null) {
             lines.addAll(classCoordinator.statusLines());

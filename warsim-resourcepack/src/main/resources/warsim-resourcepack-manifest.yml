@@ -1,0 +1,45 @@
+manifest:
+  id: "warsim-frontline-resourcepack"
+  content-version: "t017-formal-weapons-placeholder"
+  minecraft-target: "1.21.x"
+  namespace: "warsim"
+  pack-format-note: "placeholder; final pack format is validated during release packaging"
+  entries:
+    items:
+      - id: "warsim:wrench_m1895_rifle"
+        model: "warsim:item/wrench_m1895_rifle"
+        source: "T-016 formal weapon"
+        required: true
+      - id: "warsim:wrench_m1911_pistol"
+        model: "warsim:item/wrench_m1911_pistol"
+        source: "T-016 formal weapon"
+        required: true
+      - id: "warsim:wrench_m1918_smg"
+        model: "warsim:item/wrench_m1918_smg"
+        source: "T-016 formal weapon"
+        required: true
+      - id: "warsim:wrench_m1915_lmg"
+        model: "warsim:item/wrench_m1915_lmg"
+        source: "T-016 formal weapon"
+        required: true
+      - id: "warsim:wrench_m1897_shotgun"
+        model: "warsim:item/wrench_m1897_shotgun"
+        source: "T-016 formal weapon"
+        required: true
+      - id: "warsim:wrench_m1903_marksman"
+        model: "warsim:item/wrench_m1903_marksman"
+        source: "T-016 formal weapon"
+        required: true
+    development-items:
+      - id: "warsim:test_rifle"
+        model: "warsim:item/test_rifle"
+        source: "development compatibility"
+        required: false
+      - id: "warsim:test_pistol"
+        model: "warsim:item/test_pistol"
+        source: "development compatibility"
+        required: false
+      - id: "warsim:test_smg"
+        model: "warsim:item/test_smg"
+        source: "development compatibility"
+        required: false
