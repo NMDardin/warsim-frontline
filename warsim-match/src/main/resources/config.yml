@@ -38,6 +38,22 @@ vehicles:
   model-engine:
     required: false
     fail-closed-when-missing: false
+  combat:
+    enabled: true
+    allow-admin-damage: true
+    cancel-vanilla-anchor-damage: true
+    health:
+      max-health: 300.0
+      destroy-at-zero: true
+    destroy:
+      despawn-delay-ticks: 100
+      leave-wreck: false
+    damage-multipliers:
+      small-arms: 0.35
+      impact: 1.0
+      environment: 0.5
+      admin: 1.0
+      unknown: 0.25
   runtime:
     maximum-active-vehicles: 32
     tick-interval-ticks: 5
@@ -58,6 +74,16 @@ vehicles:
       display-name: "M1918 Supply Truck"
       model-engine-model-id: "warsim_truck_m1918"
       anchor-entity-type: "ARMOR_STAND"
+      health:
+        max-health: 450.0
+        small-arms-multiplier: 0.35
+        impact-multiplier: 1.0
+        environment-multiplier: 0.5
+        admin-multiplier: 1.0
+        unknown-multiplier: 0.25
+        destroy-at-zero: true
+        despawn-delay-ticks: 100
+        leave-wreck: false
       seats:
         driver:
           display-name: "Driver"
@@ -71,6 +97,16 @@ vehicles:
       display-name: "M1917 Scout Car"
       model-engine-model-id: "warsim_scout_car_m1917"
       anchor-entity-type: "ARMOR_STAND"
+      health:
+        max-health: 300.0
+        small-arms-multiplier: 0.45
+        impact-multiplier: 1.0
+        environment-multiplier: 0.5
+        admin-multiplier: 1.0
+        unknown-multiplier: 0.25
+        destroy-at-zero: true
+        despawn-delay-ticks: 80
+        leave-wreck: false
       movement:
         maximum-speed-blocks-per-second: 5.5
         acceleration-blocks-per-second-squared: 2.5

@@ -33,6 +33,22 @@ vehicles:
   model-engine:
     required: false
     fail-closed-when-missing: false
+  combat:
+    enabled: false
+    allow-admin-damage: false
+    cancel-vanilla-anchor-damage: true
+    health:
+      max-health: 300.0
+      destroy-at-zero: true
+    destroy:
+      despawn-delay-ticks: 0
+      leave-wreck: false
+    damage-multipliers:
+      small-arms: 0.0
+      impact: 0.0
+      environment: 0.0
+      admin: 0.0
+      unknown: 0.0
   runtime:
     maximum-active-vehicles: 0
     tick-interval-ticks: 5

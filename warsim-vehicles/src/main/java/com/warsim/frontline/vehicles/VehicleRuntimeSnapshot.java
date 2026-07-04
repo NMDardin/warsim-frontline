@@ -18,6 +18,7 @@ public record VehicleRuntimeSnapshot(
     double speedBlocksPerSecond,
     Optional<UUID> driverUuid,
     VehicleRuntimeState state,
+    VehicleHealthSnapshot health,
     String modelBindingStatus,
     Instant spawnedAt,
     Instant lastUpdatedAt
@@ -29,6 +30,7 @@ public record VehicleRuntimeSnapshot(
         Objects.requireNonNull(worldName, "worldName");
         driverUuid = driverUuid == null ? Optional.empty() : driverUuid;
         Objects.requireNonNull(state, "state");
+        Objects.requireNonNull(health, "health");
         Objects.requireNonNull(modelBindingStatus, "modelBindingStatus");
         Objects.requireNonNull(spawnedAt, "spawnedAt");
         Objects.requireNonNull(lastUpdatedAt, "lastUpdatedAt");

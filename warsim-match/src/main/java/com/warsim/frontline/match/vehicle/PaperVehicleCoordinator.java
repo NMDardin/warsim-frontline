@@ -1,11 +1,36 @@
 package com.warsim.frontline.match.vehicle;
 
 import com.warsim.frontline.admin.WarSimCommandRegistry;
-import com.warsim.frontline.api.battle.*;
+import com.warsim.frontline.api.battle.BattleMatchChangedEvent;
+import com.warsim.frontline.api.battle.BattleRuntimeClosedEvent;
+import com.warsim.frontline.api.battle.BattleRuntimeEvent;
+import com.warsim.frontline.api.battle.BattleRuntimeListener;
+import com.warsim.frontline.api.battle.BattleRuntimeSnapshot;
+import com.warsim.frontline.api.battle.WarSimBattleRuntime;
 import com.warsim.frontline.api.match.MatchState;
-import com.warsim.frontline.vehicles.*;
+import com.warsim.frontline.vehicles.VehicleCombatSnapshot;
+import com.warsim.frontline.vehicles.VehicleConfiguration;
+import com.warsim.frontline.vehicles.VehicleDamageOutcome;
+import com.warsim.frontline.vehicles.VehicleDamageRequest;
+import com.warsim.frontline.vehicles.VehicleDamageResult;
+import com.warsim.frontline.vehicles.VehicleDamageType;
+import com.warsim.frontline.vehicles.VehicleDefinition;
+import com.warsim.frontline.vehicles.VehicleHealthSnapshot;
+import com.warsim.frontline.vehicles.VehicleId;
+import com.warsim.frontline.vehicles.VehicleRuntimeId;
+import com.warsim.frontline.vehicles.VehicleRuntimeSnapshot;
+import com.warsim.frontline.vehicles.VehicleRuntimeState;
+import com.warsim.frontline.vehicles.VehicleSystemStatus;
 import java.time.Instant;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
 import java.util.logging.Level;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -16,15 +41,18 @@ import org.bukkit.entity.ArmorStand;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.Projectile;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.projectiles.ProjectileSource;
 import org.bukkit.util.Vector;
 
 public final class PaperVehicleCoordinator implements Listener, BattleRuntimeListener, AutoCloseable {
@@ -46,7 +74,10 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
     private long spawnAttempts;
     private long spawnSuccesses;
     private long despawnCount;
+    private long damageAttempts;
+    private long damageApplications;
     private String lastError;
+    private String lastDamageSummary = "none";
 
     public PaperVehicleCoordinator(
         JavaPlugin plugin,
@@ -76,7 +107,7 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
             lastError = "ModelEngine is required but not available";
             adapter = new FallbackAnchorAdapter();
         } else {
-            status = modelEnginePresent ? VehicleSystemStatus.ACTIVE : VehicleSystemStatus.ACTIVE_FALLBACK;
+            status = VehicleSystemStatus.ACTIVE_FALLBACK;
             adapter = new FallbackAnchorAdapter();
         }
     }
@@ -114,15 +145,35 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
         return vehicles.values().stream().map(ManagedVehicle::snapshot).toList();
     }
 
+    VehicleCombatSnapshot combatSnapshot() {
+        int destroyed = (int) vehicles.values().stream()
+            .filter(vehicle -> vehicle.state == VehicleRuntimeState.DESTROYED)
+            .count();
+        int scheduled = (int) vehicles.values().stream()
+            .filter(vehicle -> vehicle.destroyedDespawnTaskId != -1)
+            .count();
+        return new VehicleCombatSnapshot(
+            configuration.combatEnabled(),
+            configuration.allowAdminDamage(),
+            configuration.cancelVanillaAnchorDamage(),
+            vehicles.size(),
+            destroyed,
+            scheduled,
+            lastDamageSummary
+        );
+    }
+
     public List<String> statusLines() {
         return List.of(
-            "§fVehicle状态: §a" + status,
-            "§fVehicle启用: §a" + configuration.enabled(),
-            "§fVehicle活动数量: §a" + vehicles.size() + "/" + configuration.maximumActiveVehicles(),
-            "§fVehicle定义数量: §a" + definitions.size(),
-            "§fVehicle模型绑定: §a" + adapter.name(),
-            "§fVehicle生成/成功/清理: §a" + spawnAttempts + "/" + spawnSuccesses + "/" + despawnCount,
-            "§fVehicle最近错误: §e" + (lastError == null ? "无" : lastError)
+            "§fVehicle state: §a" + status,
+            "§fVehicle enabled: §a" + configuration.enabled(),
+            "§fVehicle combat: §a" + configuration.combatEnabled(),
+            "§fVehicle active: §a" + vehicles.size() + "/" + configuration.maximumActiveVehicles(),
+            "§fVehicle definitions: §a" + definitions.size(),
+            "§fVehicle adapter: §a" + adapter.name(),
+            "§fVehicle spawned/success/despawned: §a" + spawnAttempts + "/" + spawnSuccesses + "/" + despawnCount,
+            "§fVehicle damage attempts/applied: §a" + damageAttempts + "/" + damageApplications,
+            "§fVehicle last error: §e" + (lastError == null ? "none" : lastError)
         );
     }
 
@@ -197,6 +248,10 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
             return false;
         }
         ManagedVehicle vehicle = vehicles.get(runtimeId);
+        if (vehicle.state == VehicleRuntimeState.DESTROYED) {
+            sender.sendMessage("§cDestroyed vehicles cannot move.");
+            return false;
+        }
         Entity entity = vehicle.anchor.entity();
         Location current = entity.getLocation();
         if ("turn".equalsIgnoreCase(mode)) {
@@ -229,6 +284,99 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
         return runtimeId == null ? null : vehicles.get(runtimeId).snapshot();
     }
 
+    VehicleDamageResult damage(
+        String idText,
+        double amount,
+        VehicleDamageType type,
+        Optional<UUID> attackerUuid,
+        String sourceDescription
+    ) {
+        VehicleRuntimeId runtimeId = findRuntime(idText);
+        if (runtimeId == null) return null;
+        return applyDamage(new VehicleDamageRequest(
+            runtimeId,
+            Optional.ofNullable(vehicles.get(runtimeId)).map(vehicle -> vehicle.definition.id()),
+            amount,
+            type,
+            attackerUuid,
+            sourceDescription,
+            Instant.now()
+        ));
+    }
+
+    VehicleDamageResult destroy(String idText) {
+        VehicleRuntimeId runtimeId = findRuntime(idText);
+        if (runtimeId == null) return null;
+        ManagedVehicle vehicle = vehicles.get(runtimeId);
+        if (vehicle.state == VehicleRuntimeState.DESTROYED) {
+            return rejected(runtimeId, vehicle, VehicleDamageOutcome.REJECTED_ALREADY_DESTROYED,
+                "Vehicle is already destroyed");
+        }
+        return destroyVehicle(vehicle, VehicleDamageType.ADMIN, Optional.empty(),
+            vehicle.currentHealth, "admin destroy", Instant.now());
+    }
+
+    boolean repair(String idText, Optional<Double> amount) {
+        VehicleRuntimeId runtimeId = findRuntime(idText);
+        if (runtimeId == null) return false;
+        ManagedVehicle vehicle = vehicles.get(runtimeId);
+        vehicle.cancelDestroyedDespawn();
+        double max = vehicle.definition.health().maxHealth();
+        double repaired = amount.isEmpty() ? max : Math.max(0.0, amount.get());
+        vehicle.currentHealth = Math.min(max, vehicle.currentHealth + repaired);
+        if (vehicle.currentHealth > 0.0 && vehicle.state == VehicleRuntimeState.DESTROYED) {
+            vehicle.state = VehicleRuntimeState.SPAWNED;
+        }
+        vehicle.lastUpdatedAt = Instant.now();
+        return true;
+    }
+
+    VehicleDamageResult applyDamage(VehicleDamageRequest request) {
+        damageAttempts++;
+        ManagedVehicle vehicle = vehicles.get(request.runtimeId());
+        if (vehicle == null) {
+            return new VehicleDamageResult(
+                false, request.runtimeId(), 0.0, 0.0, 0.0, false,
+                VehicleDamageOutcome.REJECTED_UNKNOWN_VEHICLE, "Unknown vehicle"
+            );
+        }
+        if (!configuration.combatEnabled()) {
+            return rejected(request.runtimeId(), vehicle, VehicleDamageOutcome.REJECTED_DISABLED,
+                "Vehicle combat is disabled");
+        }
+        if (request.damageType() == VehicleDamageType.ADMIN && !configuration.allowAdminDamage()) {
+            return rejected(request.runtimeId(), vehicle, VehicleDamageOutcome.REJECTED_DISABLED,
+                "Admin vehicle damage is disabled");
+        }
+        if (request.amount() <= 0.0 || !Double.isFinite(request.amount())) {
+            return rejected(request.runtimeId(), vehicle, VehicleDamageOutcome.REJECTED_INVALID_AMOUNT,
+                "Vehicle damage amount must be greater than zero");
+        }
+        if (vehicle.state == VehicleRuntimeState.DESTROYED) {
+            return rejected(request.runtimeId(), vehicle,
+                VehicleDamageOutcome.REJECTED_ALREADY_DESTROYED, "Vehicle is already destroyed");
+        }
+        double previous = vehicle.currentHealth;
+        double applied = request.amount() * vehicle.definition.health().multiplier(request.damageType());
+        vehicle.currentHealth = Math.max(0.0, previous - applied);
+        vehicle.lastDamageType = request.damageType();
+        vehicle.lastAttackerUuid = request.attackerUuid().orElse(null);
+        vehicle.lastDamageAmount = applied;
+        vehicle.lastDamageAt = request.occurredAt();
+        vehicle.lastUpdatedAt = request.occurredAt();
+        damageApplications++;
+        if (vehicle.currentHealth <= 0.0 && vehicle.definition.health().destroyAtZero()) {
+            return destroyVehicle(vehicle, request.damageType(), request.attackerUuid(),
+                applied, request.sourceDescription(), request.occurredAt(), previous);
+        }
+        lastDamageSummary = vehicle.runtimeId.shortText() + " " + request.damageType()
+            + " -" + format(applied) + " hp=" + format(vehicle.currentHealth);
+        return new VehicleDamageResult(
+            true, request.runtimeId(), previous, vehicle.currentHealth, applied, false,
+            VehicleDamageOutcome.APPLIED, "Vehicle damage applied"
+        );
+    }
+
     @Override
     public void onEvent(BattleRuntimeEvent event) {
         if (event instanceof BattleMatchChangedEvent changed) {
@@ -251,6 +399,10 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
         event.setCancelled(true);
         ManagedVehicle vehicle = vehicles.get(runtimeId);
         if (vehicle == null) return;
+        if (vehicle.state == VehicleRuntimeState.DESTROYED) {
+            event.getPlayer().sendMessage("§cThis vehicle is destroyed.");
+            return;
+        }
         UUID playerUuid = event.getPlayer().getUniqueId();
         if (vehicle.driverUuid == null) {
             vehicle.driverUuid = playerUuid;
@@ -277,8 +429,23 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
 
     @EventHandler
     public void onDamage(EntityDamageEvent event) {
-        if (anchors.containsKey(event.getEntity().getUniqueId())) {
-            event.setCancelled(true);
+        VehicleRuntimeId runtimeId = anchors.get(event.getEntity().getUniqueId());
+        if (runtimeId == null) return;
+        event.setCancelled(true);
+        if (!configuration.combatEnabled()) return;
+        if (event instanceof EntityDamageByEntityEvent byEntity) {
+            Optional<UUID> attacker = attackerUuid(byEntity);
+            VehicleDamageType type = attacker.isPresent()
+                ? VehicleDamageType.SMALL_ARMS : VehicleDamageType.UNKNOWN;
+            applyDamage(new VehicleDamageRequest(
+                runtimeId,
+                Optional.ofNullable(vehicles.get(runtimeId)).map(vehicle -> vehicle.definition.id()),
+                Math.max(0.0, event.getDamage()),
+                type,
+                attacker,
+                "bukkit:" + event.getCause(),
+                Instant.now()
+            ));
         }
     }
 
@@ -286,9 +453,23 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
     public void onDeath(EntityDeathEvent event) {
         VehicleRuntimeId runtimeId = anchors.remove(event.getEntity().getUniqueId());
         if (runtimeId != null) {
-            vehicles.remove(runtimeId);
+            ManagedVehicle vehicle = vehicles.remove(runtimeId);
+            if (vehicle != null) vehicle.cancelDestroyedDespawn();
             despawnCount++;
         }
+    }
+
+    private Optional<UUID> attackerUuid(EntityDamageByEntityEvent event) {
+        if (event.getDamager() instanceof Player player) {
+            return Optional.of(player.getUniqueId());
+        }
+        if (event.getDamager() instanceof Projectile projectile) {
+            ProjectileSource source = projectile.getShooter();
+            if (source instanceof Player player) {
+                return Optional.of(player.getUniqueId());
+            }
+        }
+        return Optional.empty();
     }
 
     private void tick() {
@@ -300,7 +481,10 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
             .toList();
         removed.forEach(runtimeId -> {
             ManagedVehicle vehicle = vehicles.remove(runtimeId);
-            if (vehicle != null) anchors.remove(vehicle.anchor.entity().getUniqueId());
+            if (vehicle != null) {
+                vehicle.cancelDestroyedDespawn();
+                anchors.remove(vehicle.anchor.entity().getUniqueId());
+            }
         });
     }
 
@@ -323,9 +507,76 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
         return matches.size() == 1 ? matches.getFirst() : null;
     }
 
+    private VehicleDamageResult rejected(
+        VehicleRuntimeId runtimeId,
+        ManagedVehicle vehicle,
+        VehicleDamageOutcome outcome,
+        String message
+    ) {
+        double health = vehicle == null ? 0.0 : vehicle.currentHealth;
+        return new VehicleDamageResult(false, runtimeId, health, health, 0.0,
+            vehicle != null && vehicle.state == VehicleRuntimeState.DESTROYED, outcome, message);
+    }
+
+    private VehicleDamageResult destroyVehicle(
+        ManagedVehicle vehicle,
+        VehicleDamageType type,
+        Optional<UUID> attackerUuid,
+        double damageApplied,
+        String sourceDescription,
+        Instant occurredAt
+    ) {
+        return destroyVehicle(vehicle, type, attackerUuid, damageApplied,
+            sourceDescription, occurredAt, vehicle.currentHealth);
+    }
+
+    private VehicleDamageResult destroyVehicle(
+        ManagedVehicle vehicle,
+        VehicleDamageType type,
+        Optional<UUID> attackerUuid,
+        double damageApplied,
+        String sourceDescription,
+        Instant occurredAt,
+        double previousHealth
+    ) {
+        vehicle.currentHealth = 0.0;
+        vehicle.state = VehicleRuntimeState.DESTROYED;
+        vehicle.driverUuid = null;
+        vehicle.lastDamageType = type;
+        vehicle.lastAttackerUuid = attackerUuid.orElse(null);
+        vehicle.lastDamageAmount = damageApplied;
+        vehicle.lastDamageAt = occurredAt;
+        vehicle.lastUpdatedAt = occurredAt;
+        scheduleDestroyedDespawn(vehicle);
+        lastDamageSummary = vehicle.runtimeId.shortText() + " destroyed by " + type
+            + " source=" + nullToNone(sourceDescription);
+        return new VehicleDamageResult(
+            true, vehicle.runtimeId, previousHealth, 0.0, damageApplied, true,
+            VehicleDamageOutcome.DESTROYED, "Vehicle destroyed"
+        );
+    }
+
+    private void scheduleDestroyedDespawn(ManagedVehicle vehicle) {
+        vehicle.cancelDestroyedDespawn();
+        if (vehicle.definition.health().leaveWreck()) return;
+        int delay = vehicle.definition.health().despawnDelayTicks();
+        if (delay <= 0) {
+            despawn(vehicle.runtimeId, "destroyed");
+            return;
+        }
+        vehicle.destroyedDespawnTaskId = Bukkit.getScheduler().scheduleSyncDelayedTask(plugin, () -> {
+            ManagedVehicle current = vehicles.get(vehicle.runtimeId);
+            if (current == vehicle && current.state == VehicleRuntimeState.DESTROYED) {
+                current.destroyedDespawnTaskId = -1;
+                despawn(vehicle.runtimeId, "destroyed-delay");
+            }
+        }, delay);
+    }
+
     private void despawn(VehicleRuntimeId runtimeId, String reason) {
         ManagedVehicle vehicle = vehicles.remove(runtimeId);
         if (vehicle == null) return;
+        vehicle.cancelDestroyedDespawn();
         anchors.remove(vehicle.anchor.entity().getUniqueId());
         vehicle.state = VehicleRuntimeState.DESPAWNING;
         try {
@@ -365,6 +616,10 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
         }
     }
 
+    private static String format(double value) {
+        return String.format(java.util.Locale.ROOT, "%.1f", value);
+    }
+
     private static String nullToNone(String value) {
         return value == null || value.isBlank() ? "none" : value;
     }
@@ -386,7 +641,7 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
         @Override
         public VehicleAnchor spawn(VehicleDefinition definition, VehicleRuntimeId runtimeId, Location location) {
             if (!"ARMOR_STAND".equalsIgnoreCase(definition.anchorEntityType())) {
-                throw new IllegalArgumentException("Only ARMOR_STAND anchor is supported in T-018");
+                throw new IllegalArgumentException("Only ARMOR_STAND anchor is supported in T-019");
             }
             ArmorStand stand = (ArmorStand) location.getWorld().spawnEntity(location, EntityType.ARMOR_STAND);
             stand.setGravity(false);
@@ -414,6 +669,12 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
         private final VehicleAnchor anchor;
         private UUID driverUuid;
         private double speed;
+        private double currentHealth;
+        private VehicleDamageType lastDamageType;
+        private UUID lastAttackerUuid;
+        private double lastDamageAmount;
+        private Instant lastDamageAt;
+        private int destroyedDespawnTaskId = -1;
         private final Instant spawnedAt;
         private Instant lastUpdatedAt;
         private VehicleRuntimeState state = VehicleRuntimeState.SPAWNED;
@@ -432,8 +693,29 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
             this.anchor = anchor;
             this.driverUuid = driverUuid;
             this.speed = speed;
+            this.currentHealth = definition.health().maxHealth();
             this.spawnedAt = spawnedAt;
             this.lastUpdatedAt = lastUpdatedAt;
+        }
+
+        private void cancelDestroyedDespawn() {
+            if (destroyedDespawnTaskId != -1) {
+                Bukkit.getScheduler().cancelTask(destroyedDespawnTaskId);
+                destroyedDespawnTaskId = -1;
+            }
+        }
+
+        private VehicleHealthSnapshot healthSnapshot() {
+            return new VehicleHealthSnapshot(
+                currentHealth,
+                definition.health().maxHealth(),
+                state == VehicleRuntimeState.DESTROYED,
+                Optional.ofNullable(lastDamageType),
+                Optional.ofNullable(lastAttackerUuid),
+                lastDamageAmount,
+                Optional.ofNullable(lastDamageAt),
+                destroyedDespawnTaskId != -1
+            );
         }
 
         private VehicleRuntimeSnapshot snapshot() {
@@ -451,6 +733,7 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
                 speed,
                 Optional.ofNullable(driverUuid),
                 state,
+                healthSnapshot(),
                 anchor.bindingStatus(),
                 spawnedAt,
                 lastUpdatedAt

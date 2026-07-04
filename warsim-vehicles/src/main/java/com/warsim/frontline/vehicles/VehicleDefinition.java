@@ -11,7 +11,8 @@ public record VehicleDefinition(
     String modelEngineModelId,
     String anchorEntityType,
     List<VehicleSeatDefinition> seats,
-    VehicleMovementConfiguration movement
+    VehicleMovementConfiguration movement,
+    VehicleHealthConfiguration health
 ) {
     public VehicleDefinition {
         Objects.requireNonNull(id, "id");
@@ -20,6 +21,7 @@ public record VehicleDefinition(
         Objects.requireNonNull(anchorEntityType, "anchorEntityType");
         Objects.requireNonNull(seats, "seats");
         Objects.requireNonNull(movement, "movement");
+        Objects.requireNonNull(health, "health");
         if (displayName.isBlank() || displayName.length() > 80) {
             throw new IllegalArgumentException("Invalid vehicle display name");
         }

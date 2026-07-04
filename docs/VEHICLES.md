@@ -1,4 +1,4 @@
-# T-018 Vehicles
+# Vehicles
 
 T-018 is the first vehicle lifecycle foundation for WarSim: Frontline.
 
@@ -41,3 +41,37 @@ does not clear player inventory, XP, EnderChest, or world files.
 Seat ownership is diagnostic only. Right-clicking a managed anchor claims or
 releases the driver seat, but this base version does not mount the player or
 drive from live keyboard input.
+
+## T-019 Damage Core
+
+T-019 adds server-authoritative health to each managed vehicle. The domain
+types live in `warsim-vehicles` and remain platform-neutral: damage requests,
+damage results, health configuration, health snapshots, and combat snapshots do
+not reference Bukkit, Paper, ModelEngine, or MythicMobs.
+
+Vehicle combat is configured under `vehicles.combat`. The bundled placeholders
+use `truck_m1918` at 450 health and `scout_car_m1917` at 300 health. Damage is
+multiplied by type (`ADMIN`, `SMALL_ARMS`, `IMPACT`, `ENVIRONMENT`, `SCRIPTED`,
+`UNKNOWN`) before reducing health. Health at or below zero marks the vehicle as
+`DESTROYED`, clears driver ownership, and either schedules despawn or leaves the
+current fallback anchor as an inert wreck placeholder when `leave-wreck=true`.
+
+Admins can use:
+
+- `/warsim vehicle combat`
+- `/warsim vehicle damage <runtimeId> <amount> [type]`
+- `/warsim vehicle repair <runtimeId> <amount|full>`
+- `/warsim vehicle destroy <runtimeId>`
+
+Managed ArmorStand anchors cancel vanilla Bukkit damage. Player or projectile
+damage against an anchor is converted conservatively to vehicle `SMALL_ARMS`
+damage; other causes are cancelled without letting the ArmorStand die directly.
+
+T-019 intentionally does not modify `warsim-weapons-paper`. The current weapon
+hitscan path samples online players and applies damage through a player-only
+adapter, so vehicle-hit integration is left for a later explicit pass rather
+than bending the weapon pipeline in this phase.
+
+Still not included: cannons, machine guns, vehicle weapons, projectiles,
+explosions, armor, penetration, passenger damage, repair tools, ticket scoring,
+database persistence, and final ModelEngine visuals.

@@ -19,6 +19,7 @@ import com.warsim.frontline.network.redis.RedisConfiguration;
 import com.warsim.frontline.network.redis.RedisEnvironmentOverrides;
 import com.warsim.frontline.vehicles.VehicleConfiguration;
 import com.warsim.frontline.vehicles.VehicleDefinition;
+import com.warsim.frontline.vehicles.VehicleHealthConfiguration;
 import com.warsim.frontline.vehicles.VehicleId;
 import com.warsim.frontline.vehicles.VehicleMovementConfiguration;
 import com.warsim.frontline.vehicles.VehicleSeatDefinition;
@@ -635,6 +636,17 @@ public final class PaperConfigLoader {
             yaml.getDouble("vehicles.movement.default.step-height", 1.0),
             yaml.getDouble("vehicles.movement.default.slope-limit-degrees", 35.0)
         );
+        VehicleHealthConfiguration defaultHealth = new VehicleHealthConfiguration(
+            yaml.getDouble("vehicles.combat.health.max-health", 300.0),
+            yaml.getDouble("vehicles.combat.damage-multipliers.small-arms", 0.35),
+            yaml.getDouble("vehicles.combat.damage-multipliers.impact", 1.0),
+            yaml.getDouble("vehicles.combat.damage-multipliers.environment", 0.5),
+            yaml.getDouble("vehicles.combat.damage-multipliers.admin", 1.0),
+            yaml.getDouble("vehicles.combat.damage-multipliers.unknown", 0.25),
+            yaml.getBoolean("vehicles.combat.health.destroy-at-zero", true),
+            yaml.getInt("vehicles.combat.destroy.despawn-delay-ticks", 100),
+            yaml.getBoolean("vehicles.combat.destroy.leave-wreck", false)
+        );
         ArrayList<VehicleDefinition> definitions = new ArrayList<>();
         var section = yaml.getConfigurationSection("vehicles.definitions");
         if (section != null) {
@@ -678,7 +690,8 @@ public final class PaperConfigLoader {
                     yaml.getString(path + ".model-engine-model-id", "warsim_" + key),
                     anchorEntityType,
                     seats,
-                    movement
+                    movement,
+                    loadVehicleHealthConfiguration(yaml, path + ".health", defaultHealth)
                 ));
             }
         }
@@ -686,6 +699,9 @@ public final class PaperConfigLoader {
             enabled,
             yaml.getBoolean("vehicles.model-engine.required", false),
             yaml.getBoolean("vehicles.model-engine.fail-closed-when-missing", false),
+            yaml.getBoolean("vehicles.combat.enabled", enabled),
+            yaml.getBoolean("vehicles.combat.allow-admin-damage", true),
+            yaml.getBoolean("vehicles.combat.cancel-vanilla-anchor-damage", true),
             yaml.getInt("vehicles.runtime.maximum-active-vehicles", enabled ? 32 : 0),
             yaml.getInt("vehicles.runtime.tick-interval-ticks", 5),
             yaml.getBoolean("vehicles.runtime.despawn-on-match-ending", true),
@@ -693,12 +709,34 @@ public final class PaperConfigLoader {
             yaml.getBoolean("vehicles.runtime.despawn-on-failed", true),
             yaml.getBoolean("vehicles.runtime.allow-admin-spawn-outside-playing", true),
             defaults,
+            defaultHealth,
             definitions
         );
         if (configuration.enabled() && configuration.definitions().isEmpty()) {
             throw new IllegalArgumentException("vehicles.definitions is required when vehicles.enabled=true");
         }
         return configuration;
+    }
+
+    private static VehicleHealthConfiguration loadVehicleHealthConfiguration(
+        YamlConfiguration yaml,
+        String path,
+        VehicleHealthConfiguration defaults
+    ) {
+        if (!yaml.contains(path + ".max-health")) {
+            return defaults;
+        }
+        return new VehicleHealthConfiguration(
+            yaml.getDouble(path + ".max-health"),
+            yaml.getDouble(path + ".small-arms-multiplier", defaults.smallArmsMultiplier()),
+            yaml.getDouble(path + ".impact-multiplier", defaults.impactMultiplier()),
+            yaml.getDouble(path + ".environment-multiplier", defaults.environmentMultiplier()),
+            yaml.getDouble(path + ".admin-multiplier", defaults.adminMultiplier()),
+            yaml.getDouble(path + ".unknown-multiplier", defaults.unknownMultiplier()),
+            yaml.getBoolean(path + ".destroy-at-zero", defaults.destroyAtZero()),
+            yaml.getInt(path + ".despawn-delay-ticks", defaults.despawnDelayTicks()),
+            yaml.getBoolean(path + ".leave-wreck", defaults.leaveWreck())
+        );
     }
 
     private static ObjectiveSectorConfiguration loadObjectiveSectorConfiguration(

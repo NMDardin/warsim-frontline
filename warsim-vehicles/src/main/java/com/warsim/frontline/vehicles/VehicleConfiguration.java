@@ -9,6 +9,9 @@ public record VehicleConfiguration(
     boolean enabled,
     boolean modelEngineRequired,
     boolean modelEngineFailClosedWhenMissing,
+    boolean combatEnabled,
+    boolean allowAdminDamage,
+    boolean cancelVanillaAnchorDamage,
     int maximumActiveVehicles,
     int tickIntervalTicks,
     boolean despawnOnMatchEnding,
@@ -16,10 +19,12 @@ public record VehicleConfiguration(
     boolean despawnOnFailed,
     boolean allowAdminSpawnOutsidePlaying,
     VehicleMovementConfiguration defaultMovement,
+    VehicleHealthConfiguration defaultHealth,
     List<VehicleDefinition> definitions
 ) {
     public VehicleConfiguration {
         Objects.requireNonNull(defaultMovement, "defaultMovement");
+        Objects.requireNonNull(defaultHealth, "defaultHealth");
         Objects.requireNonNull(definitions, "definitions");
         if (maximumActiveVehicles < 0 || maximumActiveVehicles > 128) {
             throw new IllegalArgumentException("maximum active vehicles must be 0-128");
@@ -36,8 +41,8 @@ public record VehicleConfiguration(
 
     public static VehicleConfiguration disabled() {
         return new VehicleConfiguration(
-            false, false, false, 0, 5, true, true, true, false,
-            VehicleMovementConfiguration.defaults(), List.of()
+            false, false, false, false, false, true, 0, 5, true, true, true, false,
+            VehicleMovementConfiguration.defaults(), VehicleHealthConfiguration.defaults(), List.of()
         );
     }
 }

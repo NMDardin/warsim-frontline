@@ -1,5 +1,15 @@
 # WarSim: Frontline
 
+## T-019 Vehicle Damage Core
+
+T-019 adds server-authoritative vehicle health and damage state for the T-018
+managed vehicle runtime. Admin diagnostics can damage, repair, and destroy
+vehicles, and managed ArmorStand anchors no longer take vanilla damage directly.
+
+This does not add vehicle weapons, cannons, projectiles, explosions, armor,
+penetration, passenger damage, ticket scoring, or weapons-paper hitscan vehicle
+integration. See [`docs/VEHICLES.md`](docs/VEHICLES.md).
+
 ## T-018 Vehicle Core
 
 T-018 adds the first controlled vehicle lifecycle foundation: platform-neutral
@@ -7,8 +17,8 @@ vehicle definitions, Paper-side managed ArmorStand fallback anchors, ModelEngine
 availability diagnostics, `/warsim vehicle` admin diagnostics, and cleanup on
 match end/reset/failure and plugin shutdown.
 
-This does not add vehicle weapons, projectiles, explosions, armor, damage,
-passenger mounting, fuel, repair, physics simulation, or final ModelEngine art.
+This does not add vehicle weapons, projectiles, explosions, armor, passenger
+mounting, fuel, physics simulation, or final ModelEngine art.
 See [`docs/VEHICLES.md`](docs/VEHICLES.md).
 
 ## T-017 Resource Pack Delivery
