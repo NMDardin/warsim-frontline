@@ -23,6 +23,7 @@ public final class ObjectiveMatchCoordinator implements AutoCloseable {
     private DefaultObjectiveService objectives;
     private DefaultTicketService tickets;
     private AutoCloseable objectiveSubscription;
+    private AutoCloseable sectorSubscription;
     private AutoCloseable ticketSubscription;
     private boolean closed;
 
@@ -107,6 +108,7 @@ public final class ObjectiveMatchCoordinator implements AutoCloseable {
             matchId, ticketConfiguration, now, failureLogger
         );
         objectiveSubscription = objectives.subscribe(this::onObjectiveEvent);
+        sectorSubscription = objectives.subscribeSector(this::onObjectiveSectorEvent);
         ticketSubscription = tickets.subscribe(this::onTicketEvent);
     }
 
@@ -135,6 +137,20 @@ public final class ObjectiveMatchCoordinator implements AutoCloseable {
         }
     }
 
+    private void onObjectiveSectorEvent(ObjectiveSectorEvent event) {
+        if (!(event instanceof ObjectiveSectorCompletedEvent completed)) return;
+        MatchSnapshot snapshot = match.snapshot();
+        if (!snapshot.matchId().equals(completed.matchId())
+            || snapshot.state() != MatchState.PLAYING
+            || objectives == null
+            || !objectives.attackerVictoryOnFinalSector()
+            || !objectives.isFinalSector(completed.sectorId())) {
+            return;
+        }
+        match.end(MatchEndReason.OBJECTIVE_COMPLETED, "攻击方突破全部防线");
+    }
+
+
     private void onTicketEvent(TicketEvent event) {
         if (!(event instanceof TicketsDepletedEvent depleted)) return;
         if (depleted.teamSide() != com.warsim.frontline.api.roster.TeamSide.ATTACKERS
@@ -150,8 +166,10 @@ public final class ObjectiveMatchCoordinator implements AutoCloseable {
 
     private void closeCurrentServices() {
         closeQuietly(objectiveSubscription);
+        closeQuietly(sectorSubscription);
         closeQuietly(ticketSubscription);
         objectiveSubscription = null;
+        sectorSubscription = null;
         ticketSubscription = null;
         if (objectives != null) objectives.close();
         if (tickets != null) tickets.close();

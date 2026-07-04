@@ -175,12 +175,14 @@ public final class PaperConfigLoader {
                     "objectives.enabled", node.type() == NodeType.OFFICIAL_BATTLE
                 );
                 ArrayList<ObjectiveDefinition> definitions = new ArrayList<>();
+                LinkedHashMap<ObjectiveId, ObjectiveSectorId> pointSectors = new LinkedHashMap<>();
                 var points = yaml.getConfigurationSection("objectives.points");
                 if (points != null) {
                     for (String key : points.getKeys(false).stream().sorted().toList()) {
                         String path = "objectives.points." + key;
+                        ObjectiveId objectiveId = new ObjectiveId(key);
                         definitions.add(new ObjectiveDefinition(
-                            new ObjectiveId(key),
+                            objectiveId,
                             yaml.getString(path + ".display-name", key),
                             new ObjectiveRegion(
                                 yaml.getString(path + ".world", ""),
@@ -210,12 +212,20 @@ public final class PaperConfigLoader {
                                 yaml.getInt(path + ".rewards.defenders-capture-tickets", 0)
                             )
                         ));
+                        if (yaml.contains(path + ".sector")) {
+                            pointSectors.put(objectiveId,
+                                new ObjectiveSectorId(yaml.getString(path + ".sector", "")));
+                        }
                     }
                 }
+                ObjectiveSectorConfiguration sectors = loadObjectiveSectorConfiguration(
+                    yaml, enabled, definitions, pointSectors
+                );
                 objectiveConfiguration = new ObjectiveConfiguration(
                     enabled,
                     yaml.getInt("objectives.scan-interval-ticks", 5),
-                    definitions
+                    definitions,
+                    sectors
                 );
             } catch (RuntimeException exception) {
                 objectiveConfiguration = ObjectiveConfiguration.disabled();
@@ -546,6 +556,64 @@ public final class PaperConfigLoader {
             throw new IllegalArgumentException("Official Battle requires destruction.enabled=true");
         }
         return configuration;
+    }
+
+    private static ObjectiveSectorConfiguration loadObjectiveSectorConfiguration(
+        YamlConfiguration yaml,
+        boolean objectivesEnabled,
+        ArrayList<ObjectiveDefinition> objectives,
+        Map<ObjectiveId, ObjectiveSectorId> pointSectors
+    ) {
+        boolean enabled = yaml.getBoolean("objectives.sectors.enabled", false);
+        if (!enabled) return ObjectiveSectorConfiguration.disabled();
+        if (!objectivesEnabled) {
+            throw new IllegalArgumentException("objectives.sectors requires objectives.enabled=true");
+        }
+        var section = yaml.getConfigurationSection("objectives.sectors.definitions");
+        if (section == null) {
+            throw new IllegalArgumentException("objectives.sectors.definitions is required");
+        }
+        ArrayList<ObjectiveSectorDefinition> definitions = new ArrayList<>();
+        LinkedHashMap<ObjectiveId, ObjectiveSectorId> sectorOwners = new LinkedHashMap<>();
+        for (String key : section.getKeys(false).stream().sorted().toList()) {
+            String path = "objectives.sectors.definitions." + key;
+            ObjectiveSectorId sectorId = new ObjectiveSectorId(key);
+            ArrayList<ObjectiveId> objectiveIds = new ArrayList<>();
+            for (String objective : yaml.getStringList(path + ".objective-ids")) {
+                ObjectiveId objectiveId = new ObjectiveId(objective);
+                objectiveIds.add(objectiveId);
+                ObjectiveSectorId previous = sectorOwners.put(objectiveId, sectorId);
+                if (previous != null && !previous.equals(sectorId)) {
+                    throw new IllegalArgumentException(
+                        "objective belongs to multiple sectors: " + objectiveId
+                    );
+                }
+            }
+            definitions.add(new ObjectiveSectorDefinition(
+                sectorId,
+                yaml.getString(path + ".display-name", key),
+                yaml.getInt(path + ".order"),
+                objectiveIds
+            ));
+        }
+        for (Map.Entry<ObjectiveId, ObjectiveSectorId> entry : pointSectors.entrySet()) {
+            ObjectiveSectorId owner = sectorOwners.get(entry.getKey());
+            if (!entry.getValue().equals(owner)) {
+                throw new IllegalArgumentException(
+                    "objective sector mismatch: " + entry.getKey()
+                );
+            }
+        }
+        return new ObjectiveSectorConfiguration(
+            true,
+            new ObjectiveSectorId(yaml.getString("objectives.sectors.initial-sector", "")),
+            SectorCompletionMode.valueOf(yaml.getString(
+                "objectives.sectors.completion-mode", "ALL_OBJECTIVES_CAPTURED"
+            ).toUpperCase(java.util.Locale.ROOT)),
+            yaml.getInt("objectives.sectors.advance-delay-seconds", 5),
+            yaml.getBoolean("objectives.sectors.attacker-victory-on-final-sector", true),
+            definitions
+        );
     }
 
     private static Set<Material> materials(java.util.List<String> names, String path) {

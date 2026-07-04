@@ -6,10 +6,20 @@ import java.util.List;
 public record ObjectiveConfiguration(
     boolean enabled,
     int scanIntervalTicks,
-    List<ObjectiveDefinition> definitions
+    List<ObjectiveDefinition> definitions,
+    ObjectiveSectorConfiguration sectors
 ) {
+    public ObjectiveConfiguration(
+        boolean enabled,
+        int scanIntervalTicks,
+        List<ObjectiveDefinition> definitions
+    ) {
+        this(enabled, scanIntervalTicks, definitions, ObjectiveSectorConfiguration.disabled());
+    }
+
     public ObjectiveConfiguration {
         definitions = List.copyOf(definitions);
+        if (sectors == null) sectors = ObjectiveSectorConfiguration.disabled();
         if (scanIntervalTicks < 1 || scanIntervalTicks > 20) {
             throw new IllegalArgumentException("scanIntervalTicks must be 1-20");
         }
@@ -23,6 +33,31 @@ public record ObjectiveConfiguration(
         for (ObjectiveDefinition definition : definitions) {
             if (!ids.add(definition.objectiveId())) {
                 throw new IllegalArgumentException("Duplicate objective ID");
+            }
+        }
+        if (sectors.enabled()) {
+            if (!enabled) {
+                throw new IllegalArgumentException("sectors require objectives.enabled=true");
+            }
+            HashSet<ObjectiveId> assigned = new HashSet<>();
+            for (ObjectiveSectorDefinition sector : sectors.definitions()) {
+                for (ObjectiveId objectiveId : sector.objectiveIds()) {
+                    if (!ids.contains(objectiveId)) {
+                        throw new IllegalArgumentException(
+                            "sector references unknown objective ID: " + objectiveId
+                        );
+                    }
+                    if (!assigned.add(objectiveId)) {
+                        throw new IllegalArgumentException(
+                            "objective belongs to multiple sectors: " + objectiveId
+                        );
+                    }
+                }
+            }
+            if (!assigned.equals(ids)) {
+                throw new IllegalArgumentException(
+                    "every objective must belong to exactly one sector"
+                );
             }
         }
     }

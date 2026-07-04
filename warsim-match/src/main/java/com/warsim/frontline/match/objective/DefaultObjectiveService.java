@@ -5,6 +5,7 @@ import com.warsim.frontline.api.objective.*;
 import com.warsim.frontline.api.roster.TeamSide;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -20,9 +21,16 @@ public final class DefaultObjectiveService implements ObjectiveService {
     private final ObjectiveConfiguration configuration;
     private final Consumer<RuntimeException> listenerFailureLogger;
     private final Map<ObjectiveId, MutableObjective> objectives = new LinkedHashMap<>();
+    private final Map<ObjectiveSectorId, MutableSector> sectors = new LinkedHashMap<>();
+    private final Map<ObjectiveId, ObjectiveSectorId> objectiveSectors = new LinkedHashMap<>();
     private final List<ObjectiveEventListener> listeners = new ArrayList<>();
+    private final List<ObjectiveSectorEventListener> sectorListeners = new ArrayList<>();
     private ObjectiveSystemState systemState;
     private long lifecycleRevision;
+    private ObjectiveSectorId activeSectorId;
+    private ObjectiveSectorId pendingAdvanceFrom;
+    private long pendingAdvanceAtNanos = Long.MIN_VALUE;
+    private Instant lastSectorAdvancedAt;
     private long lastMonotonicNanos = Long.MIN_VALUE;
     private long scanCycles;
     private long scannedPlayers;
@@ -61,6 +69,20 @@ public final class DefaultObjectiveService implements ObjectiveService {
                 matchId, definition.objectiveId(), createdAt, objective.revision
             ));
         }
+        if (configuration.sectors().enabled()) {
+            for (ObjectiveSectorDefinition definition : configuration.sectors().definitions()
+                .stream().sorted(Comparator.comparingInt(ObjectiveSectorDefinition::order)).toList()) {
+                ObjectiveSectorState state = definition.sectorId().equals(
+                    configuration.sectors().initialSector()
+                ) ? ObjectiveSectorState.ACTIVE : ObjectiveSectorState.LOCKED;
+                sectors.put(definition.sectorId(), new MutableSector(definition, state,
+                    state == ObjectiveSectorState.ACTIVE ? createdAt : null));
+                for (ObjectiveId objectiveId : definition.objectiveIds()) {
+                    objectiveSectors.put(objectiveId, definition.sectorId());
+                }
+                if (state == ObjectiveSectorState.ACTIVE) activeSectorId = definition.sectorId();
+            }
+        }
         if (configuration.enabled()) systemState = ObjectiveSystemState.ACTIVE;
     }
 
@@ -72,6 +94,47 @@ public final class DefaultObjectiveService implements ObjectiveService {
     @Override
     public synchronized List<ObjectiveSnapshot> snapshots() {
         return objectives.values().stream().map(this::snapshot).toList();
+    }
+
+    public synchronized List<ObjectiveSnapshot> activeSnapshots() {
+        return objectives.values().stream()
+            .filter(objective -> isActiveObjective(objective.definition.objectiveId()))
+            .map(this::snapshot)
+            .toList();
+    }
+
+    public synchronized List<ObjectiveSectorSnapshot> sectorSnapshots() {
+        return sectors.values().stream().map(this::sectorSnapshot).toList();
+    }
+
+    public synchronized ObjectiveSectorId sectorId(ObjectiveId objectiveId) {
+        return objectiveSectors.get(objectiveId);
+    }
+
+    public synchronized ObjectiveSectorState sectorState(ObjectiveId objectiveId) {
+        if (!configuration.sectors().enabled()) return ObjectiveSectorState.ACTIVE;
+        ObjectiveSectorId sectorId = objectiveSectors.get(objectiveId);
+        MutableSector sector = sectorId == null ? null : sectors.get(sectorId);
+        return sector == null ? ObjectiveSectorState.LOCKED : sector.state;
+    }
+
+    public synchronized boolean sectorsEnabled() {
+        return configuration.sectors().enabled();
+    }
+
+    public synchronized boolean isFinalSector(ObjectiveSectorId sectorId) {
+        MutableSector sector = sectors.get(sectorId);
+        if (sector == null) return false;
+        return sectors.values().stream()
+            .noneMatch(other -> other.definition.order() > sector.definition.order());
+    }
+
+    public synchronized boolean attackerVictoryOnFinalSector() {
+        return configuration.sectors().attackerVictoryOnFinalSector();
+    }
+
+    public synchronized Instant lastSectorAdvancedAt() {
+        return lastSectorAdvancedAt;
     }
 
     @Override
@@ -109,10 +172,13 @@ public final class DefaultObjectiveService implements ObjectiveService {
             lastMonotonicNanos = frame.monotonicNanos();
             scanCycles++;
             scannedPlayers += frame.players().size();
+            handlePendingAdvance(frame.monotonicNanos(), frame.sampledAt());
             for (MutableObjective objective : objectives.values()) {
+                if (!isActiveObjective(objective.definition.objectiveId())) continue;
                 ObjectivePresence presence = count(objective.definition.region(), frame.players());
                 update(objective, presence, deltaNanos, frame.sampledAt());
             }
+            completeActiveSectorIfReady(frame.monotonicNanos(), frame.sampledAt());
             return true;
         } finally {
             lastScanNanos = Math.max(0, System.nanoTime() - started);
@@ -186,11 +252,24 @@ public final class DefaultObjectiveService implements ObjectiveService {
         };
     }
 
+    public synchronized AutoCloseable subscribeSector(ObjectiveSectorEventListener listener) {
+        Objects.requireNonNull(listener, "listener");
+        sectorListeners.add(listener);
+        return () -> {
+            synchronized (DefaultObjectiveService.this) {
+                sectorListeners.remove(listener);
+            }
+        };
+    }
+
     @Override
     public synchronized void close() {
         if (systemState == ObjectiveSystemState.CLOSED) return;
         listeners.clear();
+        sectorListeners.clear();
         objectives.clear();
+        sectors.clear();
+        objectiveSectors.clear();
         systemState = ObjectiveSystemState.CLOSED;
     }
 
@@ -345,6 +424,65 @@ public final class DefaultObjectiveService implements ObjectiveService {
         ));
     }
 
+    public synchronized boolean isActiveObjective(ObjectiveId objectiveId) {
+        if (!configuration.sectors().enabled()) return true;
+        if (activeSectorId == null) return false;
+        MutableSector sector = sectors.get(activeSectorId);
+        return sector != null
+            && sector.state == ObjectiveSectorState.ACTIVE
+            && activeSectorId.equals(objectiveSectors.get(objectiveId));
+    }
+
+    private void completeActiveSectorIfReady(long monotonicNanos, Instant now) {
+        if (!configuration.sectors().enabled() || pendingAdvanceFrom != null) return;
+        MutableSector sector = activeSectorId == null ? null : sectors.get(activeSectorId);
+        if (sector == null || sector.state != ObjectiveSectorState.ACTIVE) return;
+        boolean complete = sector.definition.objectiveIds().stream()
+            .map(objectives::get)
+            .allMatch(objective -> objective != null
+                && objective.owner == ObjectiveOwner.ATTACKERS);
+        if (!complete) return;
+        sector.state = ObjectiveSectorState.COMPLETED;
+        sector.completedAt = now;
+        publishSector(new ObjectiveSectorCompletedEvent(
+            matchId, lifecycleRevision, sector.definition.sectorId(), now
+        ));
+        if (isFinalSector(sector.definition.sectorId())) return;
+        if (configuration.sectors().advanceDelaySeconds() == 0) {
+            advanceSector(sector.definition.sectorId(), now);
+            return;
+        }
+        pendingAdvanceFrom = sector.definition.sectorId();
+        pendingAdvanceAtNanos = monotonicNanos
+            + configuration.sectors().advanceDelaySeconds() * 1_000_000_000L;
+        sector.scheduledAdvanceAt = now.plusSeconds(configuration.sectors().advanceDelaySeconds());
+    }
+
+    private void handlePendingAdvance(long monotonicNanos, Instant now) {
+        if (pendingAdvanceFrom == null || monotonicNanos < pendingAdvanceAtNanos) return;
+        advanceSector(pendingAdvanceFrom, now);
+    }
+
+    private void advanceSector(ObjectiveSectorId previousSectorId, Instant now) {
+        MutableSector previous = sectors.get(previousSectorId);
+        if (previous == null) return;
+        previous.scheduledAdvanceAt = null;
+        MutableSector next = sectors.values().stream()
+            .filter(sector -> sector.definition.order() > previous.definition.order())
+            .min(Comparator.comparingInt(sector -> sector.definition.order()))
+            .orElse(null);
+        pendingAdvanceFrom = null;
+        pendingAdvanceAtNanos = Long.MIN_VALUE;
+        if (next == null) return;
+        next.state = ObjectiveSectorState.ACTIVE;
+        next.activatedAt = now;
+        activeSectorId = next.definition.sectorId();
+        lastSectorAdvancedAt = now;
+        publishSector(new ObjectiveSectorAdvancedEvent(
+            matchId, lifecycleRevision, previousSectorId, next.definition.sectorId(), now
+        ));
+    }
+
     private double normalizedWork(MutableObjective objective, long nanos, int netPlayers) {
         return (nanos / 1_000_000_000.0)
             / objective.definition.captureRules().baseSeconds()
@@ -378,8 +516,27 @@ public final class DefaultObjectiveService implements ObjectiveService {
         );
     }
 
+    private ObjectiveSectorSnapshot sectorSnapshot(MutableSector sector) {
+        return new ObjectiveSectorSnapshot(
+            sector.definition.sectorId(), sector.definition.displayName(), sector.state,
+            sector.definition.order(), sector.definition.objectiveIds(), sector.activatedAt,
+            sector.completedAt, sector.scheduledAdvanceAt
+        );
+    }
+
     private void publish(ObjectiveEvent event) {
         for (ObjectiveEventListener listener : List.copyOf(listeners)) {
+            try {
+                listener.onEvent(event);
+            } catch (RuntimeException exception) {
+                listenerFailures++;
+                listenerFailureLogger.accept(exception);
+            }
+        }
+    }
+
+    private void publishSector(ObjectiveSectorEvent event) {
+        for (ObjectiveSectorEventListener listener : List.copyOf(sectorListeners)) {
             try {
                 listener.onEvent(event);
             } catch (RuntimeException exception) {
@@ -424,6 +581,24 @@ public final class DefaultObjectiveService implements ObjectiveService {
             stateChangedAt = now;
             revision++;
             lastCaptureKey = null;
+        }
+    }
+
+    private static final class MutableSector {
+        private final ObjectiveSectorDefinition definition;
+        private ObjectiveSectorState state;
+        private Instant activatedAt;
+        private Instant completedAt;
+        private Instant scheduledAdvanceAt;
+
+        private MutableSector(
+            ObjectiveSectorDefinition definition,
+            ObjectiveSectorState state,
+            Instant activatedAt
+        ) {
+            this.definition = definition;
+            this.state = state;
+            this.activatedAt = activatedAt;
         }
     }
 }

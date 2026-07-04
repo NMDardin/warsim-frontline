@@ -176,15 +176,85 @@ squads:
     restore-assignment: true
     grace-seconds: 120
 
-# 以下 alpha 坐标仅用于功能测试，正式地图必须重新测量。
+# 以下防线与据点坐标仅用于功能测试，正式地图必须重新测量。
 objectives:
   enabled: true
   scan-interval-ticks: 5
+  sectors:
+    enabled: true
+    initial-sector: "sector_1"
+    completion-mode: "ALL_OBJECTIVES_CAPTURED"
+    advance-delay-seconds: 5
+    attacker-victory-on-final-sector: true
+    definitions:
+      sector_1:
+        display-name: "第一防线"
+        order: 1
+        objective-ids: [ "alpha", "bravo" ]
+      sector_2:
+        display-name: "第二防线"
+        order: 2
+        objective-ids: [ "charlie", "delta" ]
   points:
     alpha:
       display-name: "A点"
+      sector: "sector_1"
       world: "world"
       center: { x: 0.5, y: 64.0, z: 0.5 }
+      radius: 8.0
+      vertical-range: 6.0
+      initial-owner: "DEFENDERS"
+      locked: false
+      capture:
+        base-seconds: 30
+        maximum-effective-players: 4
+        additional-player-rate: 0.5
+        empty-behavior: "RETURN_TO_OWNER"
+        contested-behavior: "FREEZE"
+      rewards:
+        attackers-capture-tickets: 50
+        defenders-capture-tickets: 0
+    bravo:
+      display-name: "B点"
+      sector: "sector_1"
+      world: "world"
+      center: { x: 16.5, y: 64.0, z: 0.5 }
+      radius: 8.0
+      vertical-range: 6.0
+      initial-owner: "DEFENDERS"
+      locked: false
+      capture:
+        base-seconds: 30
+        maximum-effective-players: 4
+        additional-player-rate: 0.5
+        empty-behavior: "RETURN_TO_OWNER"
+        contested-behavior: "FREEZE"
+      rewards:
+        attackers-capture-tickets: 50
+        defenders-capture-tickets: 0
+    charlie:
+      display-name: "C点"
+      sector: "sector_2"
+      world: "world"
+      center: { x: 32.5, y: 64.0, z: 0.5 }
+      radius: 8.0
+      vertical-range: 6.0
+      initial-owner: "DEFENDERS"
+      locked: false
+      capture:
+        base-seconds: 30
+        maximum-effective-players: 4
+        additional-player-rate: 0.5
+        empty-behavior: "RETURN_TO_OWNER"
+        contested-behavior: "FREEZE"
+      rewards:
+        attackers-capture-tickets: 50
+        defenders-capture-tickets: 0
+    delta:
+      display-name: "D点"
+      sector: "sector_2"
+      world: "world"
+      center: { x: 48.5, y: 64.0, z: 0.5 }
       radius: 8.0
       vertical-range: 6.0
       initial-owner: "DEFENDERS"

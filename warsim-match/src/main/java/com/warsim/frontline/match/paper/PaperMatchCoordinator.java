@@ -172,6 +172,8 @@ public final class PaperMatchCoordinator implements AutoCloseable {
             service.failInitialization("Round Reset配置无效或未启用");
         } else if (destructionConfigurationError != null) {
             service.failInitialization("Destruction配置无效");
+        } else if (objectiveConfigurationError != null) {
+            service.failInitialization("Objective配置无效");
         } else if (rosterConfigurationError != null) {
             roster.failInitialization("Roster配置无效：" + rosterConfigurationError);
             service.failInitialization("Roster配置无效");
@@ -421,8 +423,12 @@ public final class PaperMatchCoordinator implements AutoCloseable {
         java.util.ArrayList<String> lines = new java.util.ArrayList<>();
         lines.add("§6WarSim 据点列表");
         for (ObjectiveSnapshot snapshot : objectives.snapshots()) {
+            ObjectiveSectorId sectorId = objectives.sectorId(snapshot.objectiveId());
+            ObjectiveSectorState sectorState = objectives.sectorState(snapshot.objectiveId());
             lines.add("§f" + snapshot.objectiveId() + " §7(" + snapshot.displayName()
-                + ") §fowner=§a" + snapshot.owner() + " §fstate=§a" + snapshot.state()
+                + ") §fsector=§a" + (sectorId == null ? "none" : sectorId)
+                + " §fsectorState=§a" + sectorState
+                + " §fowner=§a" + snapshot.owner() + " §fstate=§a" + snapshot.state()
                 + " §fprogress=§a" + formatProgress(snapshot.progress()));
         }
         return List.copyOf(lines);
@@ -437,10 +443,15 @@ public final class PaperMatchCoordinator implements AutoCloseable {
         } catch (RuntimeException exception) {
             return List.of("§c未知据点ID。");
         }
+        ObjectiveSectorId sectorId = objectives.sectorId(snapshot.objectiveId());
+        ObjectiveSectorState sectorState = objectives.sectorState(snapshot.objectiveId());
         return List.of(
             "§6WarSim 据点状态",
             "§fobjectiveId：§a" + snapshot.objectiveId(),
             "§f名称：§a" + snapshot.displayName(),
+            "§fSector：§a" + (sectorId == null ? "none" : sectorId),
+            "§fSector状态：§a" + sectorState,
+            "§fActive：§a" + objectives.isActiveObjective(snapshot.objectiveId()),
             "§f所有权：§a" + snapshot.owner(),
             "§f状态：§a" + snapshot.state(),
             "§f进度：§a" + formatProgress(snapshot.progress()),
@@ -673,7 +684,7 @@ public final class PaperMatchCoordinator implements AutoCloseable {
                 DefaultObjectiveService objectives = currentObjectives();
                 if (objectiveDisplay != null && objectives != null) {
                     objectiveDisplay.attachMetrics(objectives);
-                    objectiveDisplay.update(frame, objectives.snapshots());
+                    objectiveDisplay.update(frame, objectives.activeSnapshots());
                 }
             }
             BattleRuntimeSnapshot after = battleSnapshot();
@@ -731,6 +742,7 @@ public final class PaperMatchCoordinator implements AutoCloseable {
         Location location = player.getLocation();
         if (location.getWorld() == null) return;
         boolean inside = objectiveConfiguration.definitions().stream()
+            .filter(definition -> objectives.isActiveObjective(definition.objectiveId()))
             .anyMatch(definition -> definition.region().contains(
                 location.getWorld().getName(), location.getX(), location.getY(), location.getZ()
             ));
@@ -752,7 +764,7 @@ public final class PaperMatchCoordinator implements AutoCloseable {
         if (objectives == null) return List.of("§fObjective系统：§e未启用");
         List<ObjectiveSnapshot> snapshots = objectives.snapshots();
         ObjectiveMetricsSnapshot metrics = objectives.metrics();
-        return List.of(
+        java.util.ArrayList<String> lines = new java.util.ArrayList<>(List.of(
             "§fObjective系统：§a" + objectives.systemState(),
             "§f据点/争夺：§a" + snapshots.size() + "/"
                 + snapshots.stream().filter(s -> s.state() == ObjectiveState.CONTESTED).count(),
@@ -763,7 +775,37 @@ public final class PaperMatchCoordinator implements AutoCloseable {
             "§f扫描耗时(ns)：§a" + metrics.lastScanDurationNanos()
                 + " / max " + metrics.maximumScanDurationNanos(),
             "§f最近捕获：§a" + (metrics.lastCaptureAt() == null ? "无" : metrics.lastCaptureAt())
-        );
+        ));
+        if (objectives.sectorsEnabled()) {
+            List<ObjectiveSectorSnapshot> sectors = objectives.sectorSnapshots();
+            ObjectiveSectorSnapshot current = sectors.stream()
+                .filter(sector -> sector.state() == ObjectiveSectorState.ACTIVE)
+                .findFirst()
+                .orElseGet(() -> sectors.stream()
+                    .filter(sector -> sector.scheduledAdvanceAt() != null)
+                    .findFirst().orElse(null));
+            long completed = sectors.stream()
+                .filter(sector -> sector.state() == ObjectiveSectorState.COMPLETED)
+                .count();
+            long capturedInCurrent = current == null ? 0 : current.objectiveIds().stream()
+                .map(objectives::snapshot)
+                .filter(snapshot -> snapshot.owner() == ObjectiveOwner.ATTACKERS)
+                .count();
+            lines.add("§6WarSim Objective Sectors");
+            lines.add("§f启用：§atrue");
+            lines.add("§f当前Sector：§a" + (current == null
+                ? "无" : current.sectorId() + " / " + current.displayName()));
+            lines.add("§f状态：§a" + (current == null ? "无" : current.state()));
+            lines.add("§f进度：§a" + capturedInCurrent + "/"
+                + (current == null ? 0 : current.objectiveIds().size()));
+            lines.add("§f下次推进：§a" + (current == null || current.scheduledAdvanceAt() == null
+                ? "无" : remaining(Instant.now(), current.scheduledAdvanceAt())));
+            lines.add("§fSector数量：§a" + sectors.size());
+            lines.add("§f已完成：§a" + completed);
+            lines.add("§f最近推进：§a" + (objectives.lastSectorAdvancedAt() == null
+                ? "无" : objectives.lastSectorAdvancedAt()));
+        }
+        return List.copyOf(lines);
     }
 
     private void objectiveOperation(

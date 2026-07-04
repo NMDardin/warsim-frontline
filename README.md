@@ -1,5 +1,15 @@
 # WarSim: Frontline
 
+## T-015 Objective Sectors
+
+T-015 adds ordered Objective Sectors for the official battle flow. Only the
+current active sector participates in objective scanning and BossBar display;
+completed sectors stay completed, and the final sector can end the Match with
+`OBJECTIVE_COMPLETED` for the attackers.
+
+This does not add spawn switching, sector rollback, ticket economy changes,
+weapons, vehicles, or map destruction. See [`docs/OBJECTIVES.md`](docs/OBJECTIVES.md).
+
 ## T-014 Controlled Destruction
 
 T-014 adds in-memory logging for controlled block destruction during official
