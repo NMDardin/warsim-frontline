@@ -14,6 +14,7 @@ import com.warsim.frontline.match.resourcepack.ResourcePackPaperConfiguration;
 import com.warsim.frontline.match.performance.PerformanceConfiguration;
 import com.warsim.frontline.network.MessageCodec;
 import com.warsim.frontline.network.redis.RedisConfiguration;
+import com.warsim.frontline.vehicles.VehicleConfiguration;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Objects;
@@ -44,6 +45,8 @@ public record WarSimPaperConfig(
     String ticketConfigurationError,
     DestructionPaperConfiguration destruction,
     String destructionConfigurationError,
+    VehicleConfiguration vehicles,
+    String vehicleConfigurationError,
     ResourcePackPaperConfiguration resourcePack,
     String resourcePackConfigurationError,
     PerformanceConfiguration performance,
@@ -69,6 +72,7 @@ public record WarSimPaperConfig(
         Objects.requireNonNull(objectives, "objectives");
         Objects.requireNonNull(tickets, "tickets");
         Objects.requireNonNull(destruction, "destruction");
+        Objects.requireNonNull(vehicles, "vehicles");
         Objects.requireNonNull(resourcePack, "resourcePack");
         Objects.requireNonNull(performance, "performance");
         Objects.requireNonNull(classes, "classes");
@@ -114,6 +118,7 @@ public record WarSimPaperConfig(
             roster, rosterConfigurationError,
             ObjectiveConfiguration.disabled(), null, TicketConfiguration.disabled(), null,
             DestructionPaperConfiguration.disabled(), "Destruction is not configured",
+            VehicleConfiguration.disabled(), "Vehicles are not configured",
             ResourcePackPaperConfiguration.disabled(), "ResourcePack is not configured",
             PerformanceConfiguration.disabled(Path.of("performance-reports")), null,
             CombatClassConfiguration.defaults(true), null,
@@ -147,6 +152,8 @@ public record WarSimPaperConfig(
             "Ticket safely disabled because full config loading failed",
             DestructionPaperConfiguration.disabled(),
             "Destruction safely disabled because full config loading failed",
+            VehicleConfiguration.disabled(),
+            "Vehicles safely disabled because full config loading failed",
             ResourcePackPaperConfiguration.disabled(),
             "ResourcePack safely disabled because full config loading failed",
             PerformanceConfiguration.disabled(Path.of("performance-reports")),

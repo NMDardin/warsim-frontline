@@ -17,6 +17,11 @@ import com.warsim.frontline.match.performance.PerformanceConfiguration;
 import com.warsim.frontline.match.resourcepack.ResourcePackPaperConfiguration;
 import com.warsim.frontline.network.redis.RedisConfiguration;
 import com.warsim.frontline.network.redis.RedisEnvironmentOverrides;
+import com.warsim.frontline.vehicles.VehicleConfiguration;
+import com.warsim.frontline.vehicles.VehicleDefinition;
+import com.warsim.frontline.vehicles.VehicleId;
+import com.warsim.frontline.vehicles.VehicleMovementConfiguration;
+import com.warsim.frontline.vehicles.VehicleSeatDefinition;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -284,6 +289,19 @@ public final class PaperConfigLoader {
                     exception
                 );
             }
+            VehicleConfiguration vehicleConfiguration;
+            String vehicleConfigurationError = null;
+            try {
+                vehicleConfiguration = loadVehicleConfiguration(yaml);
+            } catch (RuntimeException exception) {
+                vehicleConfiguration = VehicleConfiguration.disabled();
+                vehicleConfigurationError = exception.getMessage();
+                logger.log(
+                    Level.SEVERE,
+                    "[warsim-vehicle] Vehicle configuration is invalid; vehicles will fail closed.",
+                    exception
+                );
+            }
             ResourcePackPaperConfiguration resourcePackConfiguration;
             String resourcePackConfigurationError = null;
             try {
@@ -435,6 +453,8 @@ public final class PaperConfigLoader {
                 ticketConfigurationError,
                 destructionConfiguration,
                 destructionConfigurationError,
+                vehicleConfiguration,
+                vehicleConfigurationError,
                 resourcePackConfiguration,
                 resourcePackConfigurationError,
                 performanceConfiguration,
@@ -603,6 +623,82 @@ public final class PaperConfigLoader {
                 yaml.getBoolean("resource-pack.send.resend-on-status-failed", false)
             )
         );
+    }
+
+    private static VehicleConfiguration loadVehicleConfiguration(YamlConfiguration yaml) {
+        boolean enabled = yaml.getBoolean("vehicles.enabled", false);
+        VehicleMovementConfiguration defaults = new VehicleMovementConfiguration(
+            yaml.getDouble("vehicles.movement.default.maximum-speed-blocks-per-second", 4.0),
+            yaml.getDouble("vehicles.movement.default.acceleration-blocks-per-second-squared", 2.0),
+            yaml.getDouble("vehicles.movement.default.turn-degrees-per-second", 90.0),
+            yaml.getDouble("vehicles.movement.default.drag-per-second", 2.0),
+            yaml.getDouble("vehicles.movement.default.step-height", 1.0),
+            yaml.getDouble("vehicles.movement.default.slope-limit-degrees", 35.0)
+        );
+        ArrayList<VehicleDefinition> definitions = new ArrayList<>();
+        var section = yaml.getConfigurationSection("vehicles.definitions");
+        if (section != null) {
+            for (String key : section.getKeys(false).stream().sorted().toList()) {
+                String path = "vehicles.definitions." + key;
+                ArrayList<VehicleSeatDefinition> seats = new ArrayList<>();
+                var seatSection = yaml.getConfigurationSection(path + ".seats");
+                if (seatSection != null) {
+                    for (String seatKey : seatSection.getKeys(false).stream().sorted().toList()) {
+                        String seatPath = path + ".seats." + seatKey;
+                        seats.add(new VehicleSeatDefinition(
+                            seatKey,
+                            yaml.getString(seatPath + ".display-name", seatKey),
+                            yaml.getDouble(seatPath + ".offset.x", 0.0),
+                            yaml.getDouble(seatPath + ".offset.y", 0.0),
+                            yaml.getDouble(seatPath + ".offset.z", 0.0),
+                            yaml.getBoolean(seatPath + ".driver", false)
+                        ));
+                    }
+                }
+                VehicleMovementConfiguration movement = yaml.contains(path + ".movement.maximum-speed-blocks-per-second")
+                    ? new VehicleMovementConfiguration(
+                        yaml.getDouble(path + ".movement.maximum-speed-blocks-per-second"),
+                        yaml.getDouble(path + ".movement.acceleration-blocks-per-second-squared"),
+                        yaml.getDouble(path + ".movement.turn-degrees-per-second"),
+                        yaml.getDouble(path + ".movement.drag-per-second"),
+                        yaml.getDouble(path + ".movement.step-height"),
+                        yaml.getDouble(path + ".movement.slope-limit-degrees")
+                    )
+                    : defaults;
+                String anchorEntityType = yaml.getString(path + ".anchor-entity-type", "ARMOR_STAND")
+                    .toUpperCase(java.util.Locale.ROOT);
+                if (!"ARMOR_STAND".equals(anchorEntityType)) {
+                    throw new IllegalArgumentException(
+                        "vehicles.definitions." + key + ".anchor-entity-type must be ARMOR_STAND in T-018"
+                    );
+                }
+                definitions.add(new VehicleDefinition(
+                    new VehicleId(key),
+                    yaml.getString(path + ".display-name", key),
+                    yaml.getString(path + ".model-engine-model-id", "warsim_" + key),
+                    anchorEntityType,
+                    seats,
+                    movement
+                ));
+            }
+        }
+        VehicleConfiguration configuration = new VehicleConfiguration(
+            enabled,
+            yaml.getBoolean("vehicles.model-engine.required", false),
+            yaml.getBoolean("vehicles.model-engine.fail-closed-when-missing", false),
+            yaml.getInt("vehicles.runtime.maximum-active-vehicles", enabled ? 32 : 0),
+            yaml.getInt("vehicles.runtime.tick-interval-ticks", 5),
+            yaml.getBoolean("vehicles.runtime.despawn-on-match-ending", true),
+            yaml.getBoolean("vehicles.runtime.despawn-on-resetting", true),
+            yaml.getBoolean("vehicles.runtime.despawn-on-failed", true),
+            yaml.getBoolean("vehicles.runtime.allow-admin-spawn-outside-playing", true),
+            defaults,
+            definitions
+        );
+        if (configuration.enabled() && configuration.definitions().isEmpty()) {
+            throw new IllegalArgumentException("vehicles.definitions is required when vehicles.enabled=true");
+        }
+        return configuration;
     }
 
     private static ObjectiveSectorConfiguration loadObjectiveSectorConfiguration(

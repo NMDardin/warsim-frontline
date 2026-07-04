@@ -1,5 +1,16 @@
 # WarSim: Frontline
 
+## T-018 Vehicle Core
+
+T-018 adds the first controlled vehicle lifecycle foundation: platform-neutral
+vehicle definitions, Paper-side managed ArmorStand fallback anchors, ModelEngine
+availability diagnostics, `/warsim vehicle` admin diagnostics, and cleanup on
+match end/reset/failure and plugin shutdown.
+
+This does not add vehicle weapons, projectiles, explosions, armor, damage,
+passenger mounting, fuel, repair, physics simulation, or final ModelEngine art.
+See [`docs/VEHICLES.md`](docs/VEHICLES.md).
+
 ## T-017 Resource Pack Delivery
 
 T-017 adds the base resource-pack manifest, content-version validation,

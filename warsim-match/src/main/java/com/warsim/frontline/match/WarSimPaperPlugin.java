@@ -25,6 +25,7 @@ import com.warsim.frontline.match.performance.DefaultPerformanceService;
 import com.warsim.frontline.match.performance.PerformanceCommandExtension;
 import com.warsim.frontline.match.performance.PerformanceConfiguration;
 import com.warsim.frontline.match.resourcepack.PaperResourcePackCoordinator;
+import com.warsim.frontline.match.vehicle.PaperVehicleCoordinator;
 import com.warsim.frontline.match.redis.PaperNodePublication;
 import com.warsim.frontline.match.session.LocalSessionRegistry;
 import com.warsim.frontline.match.redis.PaperRedisCoordinator;
@@ -83,6 +84,7 @@ public final class WarSimPaperPlugin extends JavaPlugin implements
     private CombatOutcomeCoordinator combatCoordinator;
     private PaperDestructionCoordinator destructionCoordinator;
     private PaperResourcePackCoordinator resourcePackCoordinator;
+    private PaperVehicleCoordinator vehicleCoordinator;
     private PaperBattleRuntime battleRuntime;
     private WarSimCommandRegistry commandRegistry;
     private DefaultPerformanceService performanceService;
@@ -142,6 +144,13 @@ public final class WarSimPaperPlugin extends JavaPlugin implements
             config.resourcePackConfigurationError()
         );
         resourcePackCoordinator.start(commandRegistry);
+        vehicleCoordinator = new PaperVehicleCoordinator(
+            this,
+            battleRuntime,
+            config.vehicles(),
+            config.vehicleConfigurationError()
+        );
+        vehicleCoordinator.start(commandRegistry);
         loadScenarioService = new DefaultLoadScenarioService(
             this,
             config.node().type() == NodeType.OFFICIAL_BATTLE,
@@ -283,6 +292,9 @@ public final class WarSimPaperPlugin extends JavaPlugin implements
         }
         if (matchCoordinator != null) {
             matchCoordinator.close();
+        }
+        if (vehicleCoordinator != null) {
+            vehicleCoordinator.close();
         }
         if (combatCoordinator != null) {
             combatCoordinator.close();
@@ -455,6 +467,9 @@ public final class WarSimPaperPlugin extends JavaPlugin implements
         }
         if (resourcePackCoordinator != null) {
             lines.addAll(resourcePackCoordinator.statusLines());
+        }
+        if (vehicleCoordinator != null) {
+            lines.addAll(vehicleCoordinator.statusLines());
         }
         if (classCoordinator != null) {
             lines.addAll(classCoordinator.statusLines());

@@ -28,6 +28,27 @@ resource-pack:
     on-join: false
     delay-ticks: 40
     resend-on-status-failed: false
+vehicles:
+  enabled: false
+  model-engine:
+    required: false
+    fail-closed-when-missing: false
+  runtime:
+    maximum-active-vehicles: 0
+    tick-interval-ticks: 5
+    despawn-on-match-ending: true
+    despawn-on-resetting: true
+    despawn-on-failed: true
+    allow-admin-spawn-outside-playing: false
+  movement:
+    default:
+      maximum-speed-blocks-per-second: 0.0
+      acceleration-blocks-per-second-squared: 0.0
+      turn-degrees-per-second: 0.0
+      drag-per-second: 0.0
+      step-height: 0.0
+      slope-limit-degrees: 0.0
+  definitions: {}
 database:
   enabled: false
   jdbc-url: "jdbc:postgresql://127.0.0.1:5432/warsim_frontline"

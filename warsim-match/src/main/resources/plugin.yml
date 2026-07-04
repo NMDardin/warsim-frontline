@@ -8,7 +8,7 @@ softdepend: [ModelEngine, MythicMobs]
 commands:
   warsim:
     description: WarSim Frontline status, transfer and dynamically extended battle operations
-    usage: /warsim <status|join|redis|match|team|squad|objective|tickets|weapon|perf|loadmap|resourcepack|class|deploy|deployment>
+    usage: /warsim <status|join|redis|match|team|squad|objective|tickets|vehicle|weapon|perf|loadmap|resourcepack|class|deploy|deployment>
 permissions:
   warsim.admin.status:
     description: View WarSim node status.
@@ -18,6 +18,9 @@ permissions:
     default: op
   warsim.admin.resourcepack:
     description: View WarSim resource pack manifest and player status diagnostics.
+    default: op
+  warsim.admin.vehicle:
+    description: View and operate WarSim vehicle diagnostics.
     default: op
   warsim.player.join:
     description: Request transfer from lobby to a battle node.
