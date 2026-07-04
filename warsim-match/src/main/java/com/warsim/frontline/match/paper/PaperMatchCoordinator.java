@@ -8,6 +8,8 @@ import com.warsim.frontline.api.match.MatchSnapshot;
 import com.warsim.frontline.api.match.MatchState;
 import com.warsim.frontline.api.match.MatchResetStartedEvent;
 import com.warsim.frontline.api.match.MatchStateChangedEvent;
+import com.warsim.frontline.api.match.MatchResetContext;
+import com.warsim.frontline.api.match.MatchResetResult;
 import com.warsim.frontline.api.match.MatchParticipantState;
 import com.warsim.frontline.api.roster.*;
 import com.warsim.frontline.api.objective.*;
@@ -34,7 +36,9 @@ import java.util.ArrayDeque;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
+import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
@@ -60,6 +64,7 @@ public final class PaperMatchCoordinator implements AutoCloseable {
     private final String ticketConfigurationError;
     private final ObjectiveMatchCoordinator objectiveCoordinator;
     private final PaperObjectiveDisplay objectiveDisplay;
+    private final Supplier<List<String>> destructionStatusLines;
     private final ArrayDeque<String> administratorHistory = new ArrayDeque<>();
     private BattleRuntimeSnapshot lastPublishedBattleSnapshot;
     private int tickTaskId = -1;
@@ -78,6 +83,9 @@ public final class PaperMatchCoordinator implements AutoCloseable {
         String objectiveConfigurationError,
         TicketConfiguration ticketConfiguration,
         String ticketConfigurationError,
+        String destructionConfigurationError,
+        List<Function<MatchResetContext, MatchResetResult>> resetPhaseCallbacks,
+        Supplier<List<String>> destructionStatusLines,
         Predicate<UUID> localSessionActive,
         PaperBattleRuntime battleRuntime,
         PerformanceService performanceService
@@ -90,6 +98,9 @@ public final class PaperMatchCoordinator implements AutoCloseable {
         this.objectiveConfiguration = objectiveConfiguration;
         this.objectiveConfigurationError = objectiveConfigurationError;
         this.ticketConfigurationError = ticketConfigurationError;
+        this.destructionStatusLines = java.util.Objects.requireNonNull(
+            destructionStatusLines, "destructionStatusLines"
+        );
         AtomicReference<DefaultMatchService> serviceRef = new AtomicReference<>();
         this.resetService = new PaperMatchResetService(
             plugin,
@@ -98,7 +109,8 @@ public final class PaperMatchCoordinator implements AutoCloseable {
             () -> {
                 DefaultMatchService current = serviceRef.get();
                 return current == null ? null : current.snapshot();
-            }
+            },
+            resetPhaseCallbacks
         );
         this.service = new DefaultMatchService(
             nodeId,
@@ -158,6 +170,8 @@ public final class PaperMatchCoordinator implements AutoCloseable {
             service.failInitialization("Match配置无效");
         } else if (roundResetConfigurationError != null || !roundResetConfiguration.enabled()) {
             service.failInitialization("Round Reset配置无效或未启用");
+        } else if (destructionConfigurationError != null) {
+            service.failInitialization("Destruction配置无效");
         } else if (rosterConfigurationError != null) {
             roster.failInitialization("Roster配置无效：" + rosterConfigurationError);
             service.failInitialization("Roster配置无效");
@@ -198,7 +212,7 @@ public final class PaperMatchCoordinator implements AutoCloseable {
             plugin, nodeId, configuration, configurationError,
             RoundResetPaperConfiguration.disabled(), "Round Reset is not configured",
             rosterConfiguration, rosterConfigurationError, objectiveConfiguration, objectiveConfigurationError,
-            ticketConfiguration, ticketConfigurationError, localSessionActive,
+            ticketConfiguration, ticketConfigurationError, null, List.of(), List::of, localSessionActive,
             new PaperBattleRuntime(ignored -> {}),
             new com.warsim.frontline.match.performance.DefaultPerformanceService(
                 plugin,
@@ -289,6 +303,7 @@ public final class PaperMatchCoordinator implements AutoCloseable {
         lines.addAll(rosterStatusLines());
         lines.addAll(objectiveStatusSummaryLines());
         lines.addAll(ticketStatusLines());
+        lines.addAll(destructionStatusLines.get());
         lines.addAll(resetService.statusLines());
         return List.copyOf(lines);
     }

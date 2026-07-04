@@ -2,7 +2,7 @@
 
 T-013 adds a Paper-side round reset transaction for the official battle node. It clears only transient round state after the Match enters `RESETTING`.
 
-It does not restore blocks, copy a world folder, delete a world folder, unload worlds, reload worlds, or create worlds. Block change logging and block restoration belong to the later map restoration work.
+It does not copy a world folder, delete a world folder, unload worlds, reload worlds, or create worlds. T-014 may restore only blocks previously recorded by the controlled destruction ledger.
 
 ## Configuration
 
@@ -34,7 +34,7 @@ Before deploying a real map, confirm `holding-spawn` and `transient-worlds`. Do 
 
 `DefaultMatchService` remains the owner of Match state. When it enters `RESETTING`, `PaperMatchCoordinator` publishes the Battle Runtime lifecycle event before the Paper reset service performs cleanup. Class, combat, and Weapons listeners therefore receive `RESETTING` first.
 
-The reset service then runs one delayed main-thread Bukkit task. It returns `MatchResetResult.success(...)` only when every configured cleanup step succeeds. Any failure returns `MatchResetResult.failure(...)`; `DefaultMatchService` decides whether the Match enters `FAILED`.
+The reset service then runs one delayed main-thread Bukkit task. It evacuates players, runs registered reset callbacks such as controlled block restoration, and then removes transient entities. It returns `MatchResetResult.success(...)` only when every configured cleanup step succeeds. Any failure returns `MatchResetResult.failure(...)`; `DefaultMatchService` decides whether the Match enters `FAILED`.
 
 Duplicate reset requests for the same Match and lifecycle revision share the same active result or return the cached completed result. A different reset request while one is active is rejected.
 

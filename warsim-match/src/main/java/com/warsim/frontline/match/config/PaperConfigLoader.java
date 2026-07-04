@@ -11,6 +11,8 @@ import com.warsim.frontline.api.ticket.*;
 import com.warsim.frontline.api.weapon.WeaponId;
 import com.warsim.frontline.database.config.DatabaseConfiguration;
 import com.warsim.frontline.database.config.DatabaseEnvironmentOverrides;
+import com.warsim.frontline.destruction.DestructionPaperConfiguration;
+import com.warsim.frontline.destruction.DestructionProtectedRegion;
 import com.warsim.frontline.match.performance.PerformanceConfiguration;
 import com.warsim.frontline.network.redis.RedisConfiguration;
 import com.warsim.frontline.network.redis.RedisEnvironmentOverrides;
@@ -28,6 +30,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import org.bukkit.Material;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -254,6 +257,22 @@ public final class PaperConfigLoader {
                     exception
                 );
             }
+            DestructionPaperConfiguration destructionConfiguration;
+            String destructionConfigurationError = null;
+            try {
+                destructionConfiguration = loadDestructionConfiguration(
+                    yaml,
+                    node.type() == NodeType.OFFICIAL_BATTLE && matchConfiguration.enabled()
+                );
+            } catch (RuntimeException exception) {
+                destructionConfiguration = DestructionPaperConfiguration.disabled();
+                destructionConfigurationError = exception.getMessage();
+                logger.log(
+                    Level.SEVERE,
+                    "[warsim-destruction] Destruction configuration is invalid; controlled destruction will fail closed.",
+                    exception
+                );
+            }
             PerformanceConfiguration performanceConfiguration;
             String performanceConfigurationError = null;
             try {
@@ -390,6 +409,8 @@ public final class PaperConfigLoader {
                 objectiveConfigurationError,
                 ticketConfiguration,
                 ticketConfigurationError,
+                destructionConfiguration,
+                destructionConfigurationError,
                 performanceConfiguration,
                 performanceConfigurationError,
                 classConfiguration,
@@ -476,6 +497,70 @@ public final class PaperConfigLoader {
             CombatPaperConfiguration.seconds(yaml.getLong("kill-feed.ttl-seconds", 8)),
             Math.max(0, yaml.getLong("kill-feed.throttle-millis", 1000)) * 1_000_000L
         );
+    }
+
+    private static DestructionPaperConfiguration loadDestructionConfiguration(
+        YamlConfiguration yaml,
+        boolean officialMatchEnabled
+    ) {
+        boolean enabled = yaml.getBoolean("destruction.enabled", officialMatchEnabled);
+        boolean restoreEnabled = yaml.getBoolean("destruction.restore.enabled", enabled);
+        Set<String> worlds = yaml.getStringList("destruction.worlds").stream()
+            .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        Set<Material> allowList = materials(yaml.getStringList("destruction.materials.allow-list"),
+            "destruction.materials.allow-list");
+        Set<Material> denyList = materials(yaml.getStringList("destruction.materials.deny-list"),
+            "destruction.materials.deny-list");
+        ArrayList<DestructionProtectedRegion> protectedRegions = new ArrayList<>();
+        var regions = yaml.getConfigurationSection("destruction.protected-regions");
+        if (regions != null) {
+            for (String id : regions.getKeys(false).stream().sorted().toList()) {
+                String path = "destruction.protected-regions." + id;
+                protectedRegions.add(new DestructionProtectedRegion(
+                    id,
+                    yaml.getString(path + ".world", ""),
+                    yaml.getDouble(path + ".min.x"),
+                    yaml.getDouble(path + ".min.y"),
+                    yaml.getDouble(path + ".min.z"),
+                    yaml.getDouble(path + ".max.x"),
+                    yaml.getDouble(path + ".max.y"),
+                    yaml.getDouble(path + ".max.z")
+                ));
+            }
+        }
+        DestructionPaperConfiguration configuration = new DestructionPaperConfiguration(
+            enabled,
+            yaml.getBoolean("destruction.record.entity-explosions", true),
+            yaml.getBoolean("destruction.record.block-explosions", true),
+            yaml.getBoolean("destruction.record.player-block-breaks", false),
+            yaml.getBoolean("destruction.record.player-block-places", false),
+            restoreEnabled,
+            yaml.getInt("destruction.restore.maximum-blocks-per-match", 50_000),
+            yaml.getInt("destruction.restore.maximum-blocks-per-reset", 50_000),
+            worlds,
+            allowList,
+            denyList,
+            protectedRegions
+        );
+        if (officialMatchEnabled && !configuration.enabled()) {
+            throw new IllegalArgumentException("Official Battle requires destruction.enabled=true");
+        }
+        return configuration;
+    }
+
+    private static Set<Material> materials(java.util.List<String> names, String path) {
+        LinkedHashSet<Material> materials = new LinkedHashSet<>();
+        for (String name : names) {
+            Material material = Material.matchMaterial(name == null ? "" : name);
+            if (material == null) {
+                throw new IllegalArgumentException(path + " contains unknown material: " + name);
+            }
+            if (!material.isBlock()) {
+                throw new IllegalArgumentException(path + " contains non-block material: " + name);
+            }
+            materials.add(material);
+        }
+        return materials;
     }
 
     private static CombatClassConfiguration loadClassConfiguration(YamlConfiguration yaml) {

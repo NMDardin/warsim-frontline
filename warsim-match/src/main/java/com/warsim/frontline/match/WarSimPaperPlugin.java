@@ -11,6 +11,7 @@ import com.warsim.frontline.api.objective.ObjectiveId;
 import com.warsim.frontline.api.objective.ObjectiveOwner;
 import com.warsim.frontline.api.ticket.TicketOperationType;
 import com.warsim.frontline.api.performance.PerformanceService;
+import com.warsim.frontline.destruction.PaperDestructionCoordinator;
 import com.warsim.frontline.match.config.PaperConfigLoader;
 import com.warsim.frontline.match.config.WarSimPaperConfig;
 import com.warsim.frontline.match.combat.CombatOutcomeCoordinator;
@@ -79,6 +80,7 @@ public final class WarSimPaperPlugin extends JavaPlugin implements
     private PaperMatchCoordinator matchCoordinator;
     private PaperClassCoordinator classCoordinator;
     private CombatOutcomeCoordinator combatCoordinator;
+    private PaperDestructionCoordinator destructionCoordinator;
     private PaperBattleRuntime battleRuntime;
     private WarSimCommandRegistry commandRegistry;
     private DefaultPerformanceService performanceService;
@@ -154,6 +156,12 @@ public final class WarSimPaperPlugin extends JavaPlugin implements
         );
         databaseCoordinator.start();
         if (config.node().type() == NodeType.OFFICIAL_BATTLE && config.match().enabled()) {
+            destructionCoordinator = new PaperDestructionCoordinator(
+                this,
+                battleRuntime,
+                config.destruction(),
+                config.destructionConfigurationError()
+            );
             matchCoordinator = new PaperMatchCoordinator(
                 this,
                 config.node().id(),
@@ -167,11 +175,15 @@ public final class WarSimPaperPlugin extends JavaPlugin implements
                 config.objectiveConfigurationError(),
                 config.tickets(),
                 config.ticketConfigurationError(),
+                config.destructionConfigurationError(),
+                List.of(destructionCoordinator::restoreForReset),
+                destructionCoordinator::statusLines,
                 playerUuid -> sessionRegistry.find(playerUuid).isPresent(),
                 battleRuntime,
                 performanceService
             );
             matchCoordinator.start();
+            destructionCoordinator.start();
             classCoordinator = new PaperClassCoordinator(
                 this,
                 matchCoordinator,
@@ -269,6 +281,9 @@ public final class WarSimPaperPlugin extends JavaPlugin implements
         }
         if (classCoordinator != null) {
             classCoordinator.close();
+        }
+        if (destructionCoordinator != null) {
+            destructionCoordinator.close();
         }
         if (battleRuntime != null) {
             battleRuntime.close();

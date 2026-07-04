@@ -14,6 +14,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.logging.Level;
@@ -39,6 +40,7 @@ public final class PaperMatchResetService implements MatchResetService, AutoClos
     private final RoundResetPaperConfiguration configuration;
     private final Predicate<UUID> localSessionActive;
     private final Supplier<MatchSnapshot> matchSnapshotSupplier;
+    private final List<Function<MatchResetContext, MatchResetResult>> resetPhaseCallbacks;
     private boolean closed;
     private ResetKey activeKey;
     private CompletableFuture<MatchResetResult> activeFuture;
@@ -72,12 +74,14 @@ public final class PaperMatchResetService implements MatchResetService, AutoClos
         JavaPlugin plugin,
         RoundResetPaperConfiguration configuration,
         Predicate<UUID> localSessionActive,
-        Supplier<MatchSnapshot> matchSnapshotSupplier
+        Supplier<MatchSnapshot> matchSnapshotSupplier,
+        List<Function<MatchResetContext, MatchResetResult>> resetPhaseCallbacks
     ) {
         this.plugin = Objects.requireNonNull(plugin, "plugin");
         this.configuration = Objects.requireNonNull(configuration, "configuration");
         this.localSessionActive = Objects.requireNonNull(localSessionActive, "localSessionActive");
         this.matchSnapshotSupplier = Objects.requireNonNull(matchSnapshotSupplier, "matchSnapshotSupplier");
+        this.resetPhaseCallbacks = List.copyOf(Objects.requireNonNull(resetPhaseCallbacks, "resetPhaseCallbacks"));
     }
 
     @Override
@@ -113,7 +117,7 @@ public final class PaperMatchResetService implements MatchResetService, AutoClos
         try {
             scheduledTaskId = Bukkit.getScheduler().scheduleSyncDelayedTask(
                 plugin,
-                () -> runScheduled(key, future),
+                () -> runScheduled(key, context, future),
                 configuration.startDelayTicks()
             );
             if (scheduledTaskId < 0) {
@@ -166,7 +170,11 @@ public final class PaperMatchResetService implements MatchResetService, AutoClos
         return configuration.enabled();
     }
 
-    private void runScheduled(ResetKey key, CompletableFuture<MatchResetResult> future) {
+    private void runScheduled(
+        ResetKey key,
+        MatchResetContext context,
+        CompletableFuture<MatchResetResult> future
+    ) {
         synchronized (this) {
             scheduledTaskId = -1;
             if (closed || !plugin.isEnabled() || !key.equals(activeKey) || future != activeFuture) {
@@ -185,7 +193,12 @@ public final class PaperMatchResetService implements MatchResetService, AutoClos
             if (configuration.evacuateOnlinePlayers()) {
                 evacuatePlayers(report);
             }
-            collectAndRemoveTransientEntities(report);
+            if (report.successful() && validateContextForPhase(key, future, report, "after player evacuation")) {
+                runResetPhaseCallbacks(context, key, future, report);
+            }
+            if (report.successful() && validateContextForPhase(key, future, report, "after reset callbacks")) {
+                collectAndRemoveTransientEntities(report);
+            }
         } catch (RuntimeException exception) {
             report.fail("Round Reset failed: " + sanitize(exception.getMessage()));
             plugin.getLogger().log(Level.WARNING, "[warsim-reset] Round Reset threw", exception);
@@ -195,6 +208,51 @@ public final class PaperMatchResetService implements MatchResetService, AutoClos
             : MatchResetResult.failure(report.summary());
         recordReport(report);
         finishActive(key, future, result);
+    }
+
+    private boolean validateContextForPhase(
+        ResetKey key,
+        CompletableFuture<MatchResetResult> future,
+        ResetReport report,
+        String phase
+    ) {
+        String contextFailure = resetContextFailure(key);
+        if (contextFailure == null) {
+            return true;
+        }
+        String summary = "Round Reset context stale " + phase + ": " + contextFailure;
+        plugin.getLogger().warning("[warsim-reset] " + summary);
+        report.fail(summary);
+        finishActive(key, future, MatchResetResult.failure(summary));
+        return false;
+    }
+
+    private void runResetPhaseCallbacks(
+        MatchResetContext context,
+        ResetKey key,
+        CompletableFuture<MatchResetResult> future,
+        ResetReport report
+    ) {
+        for (Function<MatchResetContext, MatchResetResult> callback : resetPhaseCallbacks) {
+            if (!validateContextForPhase(key, future, report, "before reset callback")) {
+                return;
+            }
+            MatchResetResult result;
+            try {
+                result = callback.apply(context);
+            } catch (RuntimeException exception) {
+                report.fail("Round Reset callback failed");
+                plugin.getLogger().log(Level.WARNING, "[warsim-reset] Reset callback threw", exception);
+                return;
+            }
+            if (result == null || !result.successful()) {
+                report.fail(result == null ? "Round Reset callback failed" : result.summary());
+                return;
+            }
+            if (!validateContextForPhase(key, future, report, "after reset callback")) {
+                return;
+            }
+        }
     }
 
     private void evacuatePlayers(ResetReport report) {

@@ -77,6 +77,22 @@ match:
     evacuate-online-players: false
     maximum-transient-entities: 0
     transient-worlds: []
+destruction:
+  enabled: false
+  record:
+    entity-explosions: false
+    block-explosions: false
+    player-block-breaks: false
+    player-block-places: false
+  restore:
+    enabled: false
+    maximum-blocks-per-match: 0
+    maximum-blocks-per-reset: 0
+  worlds: []
+  materials:
+    allow-list: []
+    deny-list: []
+  protected-regions: {}
 teams:
   enabled: false
 squads:

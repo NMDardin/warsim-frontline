@@ -1,5 +1,15 @@
 # WarSim: Frontline
 
+## T-014 Controlled Destruction
+
+T-014 adds in-memory logging for controlled block destruction during official
+battles. Allowed explosion-damaged blocks have their original `BlockData`
+captured once per Match, then restored during the `RESETTING` transaction.
+
+This does not copy, delete, unload, reload, or rebuild Minecraft world folders,
+and it does not persist container, sign, spawner, or TileEntity internals. See
+[`docs/DESTRUCTION.md`](docs/DESTRUCTION.md).
+
 ## T-013 Round Reset
 
 T-013 adds the official battle round reset transaction. When a Match enters

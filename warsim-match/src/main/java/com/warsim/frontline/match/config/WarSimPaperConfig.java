@@ -9,6 +9,7 @@ import com.warsim.frontline.api.objective.ObjectiveConfiguration;
 import com.warsim.frontline.api.roster.RosterConfiguration;
 import com.warsim.frontline.api.ticket.TicketConfiguration;
 import com.warsim.frontline.database.config.DatabaseConfiguration;
+import com.warsim.frontline.destruction.DestructionPaperConfiguration;
 import com.warsim.frontline.match.performance.PerformanceConfiguration;
 import com.warsim.frontline.network.MessageCodec;
 import com.warsim.frontline.network.redis.RedisConfiguration;
@@ -40,6 +41,8 @@ public record WarSimPaperConfig(
     String objectiveConfigurationError,
     TicketConfiguration tickets,
     String ticketConfigurationError,
+    DestructionPaperConfiguration destruction,
+    String destructionConfigurationError,
     PerformanceConfiguration performance,
     String performanceConfigurationError,
     CombatClassConfiguration classes,
@@ -62,6 +65,7 @@ public record WarSimPaperConfig(
         Objects.requireNonNull(roster, "roster");
         Objects.requireNonNull(objectives, "objectives");
         Objects.requireNonNull(tickets, "tickets");
+        Objects.requireNonNull(destruction, "destruction");
         Objects.requireNonNull(performance, "performance");
         Objects.requireNonNull(classes, "classes");
         Objects.requireNonNull(deployment, "deployment");
@@ -105,6 +109,7 @@ public record WarSimPaperConfig(
             RoundResetPaperConfiguration.disabled(), "Round Reset is not configured",
             roster, rosterConfigurationError,
             ObjectiveConfiguration.disabled(), null, TicketConfiguration.disabled(), null,
+            DestructionPaperConfiguration.disabled(), "Destruction is not configured",
             PerformanceConfiguration.disabled(Path.of("performance-reports")), null,
             CombatClassConfiguration.defaults(true), null,
             DeploymentPaperConfiguration.disabled(), null,
@@ -135,6 +140,8 @@ public record WarSimPaperConfig(
             "Objective safely disabled because full config loading failed",
             TicketConfiguration.disabled(),
             "Ticket safely disabled because full config loading failed",
+            DestructionPaperConfiguration.disabled(),
+            "Destruction safely disabled because full config loading failed",
             PerformanceConfiguration.disabled(Path.of("performance-reports")),
             "Performance safely disabled because full config loading failed",
             CombatClassConfiguration.defaults(true),
