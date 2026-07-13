@@ -65,8 +65,11 @@ final class VehicleCommandExtension implements WarSimCommandExtension {
         sender.sendMessage("§fEnabled: §a" + snapshot.combatEnabled());
         sender.sendMessage("§fAdmin damage: §a" + snapshot.allowAdminDamage());
         sender.sendMessage("§fCancel vanilla anchor damage: §a" + snapshot.cancelVanillaAnchorDamage());
+        sender.sendMessage("§fVehicleDamageService registered: §a" + snapshot.damageServiceRegistered());
         sender.sendMessage("§fActive/destroyed/scheduled: §a" + snapshot.activeVehicles()
             + "/" + snapshot.destroyedVehicles() + "/" + snapshot.scheduledDespawns());
+        sender.sendMessage("§fLast weapon/source: §e" + snapshot.lastWeaponId()
+            + " / " + snapshot.lastSourceDescription());
         sender.sendMessage("§fLast damage: §e" + snapshot.lastDamageSummary());
     }
 
@@ -149,6 +152,8 @@ final class VehicleCommandExtension implements WarSimCommandExtension {
             + snapshot.health().lastDamageType().map(Enum::name).orElse("none")
             + " amount=" + fmt(snapshot.health().lastDamageAmount())
             + " attacker=" + snapshot.health().lastAttackerUuid().map(Object::toString).orElse("none")
+            + " weapon=" + snapshot.health().lastWeaponId().orElse("none")
+            + " source=" + emptyToNone(snapshot.health().lastSourceDescription())
             + " at=" + snapshot.health().lastDamageAt()
                 .map(DateTimeFormatter.ISO_INSTANT::format).orElse("none"));
     }
@@ -174,6 +179,10 @@ final class VehicleCommandExtension implements WarSimCommandExtension {
             sender.sendMessage("§eUsage: /warsim vehicle damage <runtimeId> <amount> [type]");
             return;
         }
+        if (!coordinator.configuration().combatEnabled()) {
+            sender.sendMessage("§cVehicle combat is disabled.");
+            return;
+        }
         VehicleDamageType type = arguments.length == 4
             ? VehicleDamageType.valueOf(arguments[3].toUpperCase(Locale.ROOT))
             : VehicleDamageType.ADMIN;
@@ -196,6 +205,10 @@ final class VehicleCommandExtension implements WarSimCommandExtension {
             sender.sendMessage("§eUsage: /warsim vehicle repair <runtimeId> <amount|full>");
             return;
         }
+        if (!coordinator.configuration().combatEnabled()) {
+            sender.sendMessage("§cVehicle combat is disabled.");
+            return;
+        }
         Optional<Double> amount = "full".equalsIgnoreCase(arguments[2])
             ? Optional.empty() : Optional.of(Double.parseDouble(arguments[2]));
         if (amount.isPresent() && (!Double.isFinite(amount.get()) || amount.get() <= 0.0)) {
@@ -214,6 +227,10 @@ final class VehicleCommandExtension implements WarSimCommandExtension {
             sender.sendMessage("§eUsage: /warsim vehicle destroy <runtimeId>");
             return;
         }
+        if (!coordinator.configuration().combatEnabled()) {
+            sender.sendMessage("§cVehicle combat is disabled.");
+            return;
+        }
         VehicleDamageResult result = coordinator.destroy(arguments[1]);
         if (result == null) {
             sender.sendMessage("§cUnknown or ambiguous vehicle runtime id.");
@@ -226,6 +243,10 @@ final class VehicleCommandExtension implements WarSimCommandExtension {
 
     private static String fmt(double value) {
         return String.format(Locale.ROOT, "%.1f", value);
+    }
+
+    private static String emptyToNone(String value) {
+        return value == null || value.isBlank() ? "none" : value;
     }
 
     private static void usage(CommandSender sender) {

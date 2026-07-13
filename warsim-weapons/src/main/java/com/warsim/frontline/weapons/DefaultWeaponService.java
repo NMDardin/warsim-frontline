@@ -164,11 +164,15 @@ public final class DefaultWeaponService implements WeaponService {
                 metrics.misses.incrementAndGet();
             }
         } else {
-            relation = relationResolver.apply(hit.targetUuid());
+            relation = hit.targetType() == HitTargetType.VEHICLE
+                ? CombatRelation.ENEMY : relationResolver.apply(hit.targetUuid());
             if (relation == null) relation = CombatRelation.UNKNOWN;
-            friendly = relation == CombatRelation.SQUADMATE || relation == CombatRelation.TEAMMATE;
+            friendly = hit.targetType() != HitTargetType.VEHICLE
+                && (relation == CombatRelation.SQUADMATE || relation == CombatRelation.TEAMMATE);
             DamageResult calculated = damage.calculate(new DamageRequest(
-                definition, hit.distance(), hit.hitZone(), relation,
+                definition, hit.distance(),
+                hit.targetType() == HitTargetType.VEHICLE ? HitZone.BODY : hit.hitZone(),
+                relation,
                 damagePolicy.friendlyFireEnabled(), damagePolicy.selfDamageEnabled()
             ));
             outcome = calculated.outcome();

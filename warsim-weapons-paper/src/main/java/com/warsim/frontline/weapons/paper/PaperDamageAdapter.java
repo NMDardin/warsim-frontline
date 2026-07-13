@@ -8,6 +8,9 @@ import com.warsim.frontline.api.combat.DamageCorrelationToken;
 import com.warsim.frontline.api.combat.SpawnProtectionService;
 import com.warsim.frontline.api.match.MatchState;
 import com.warsim.frontline.api.weapon.HitZone;
+import com.warsim.frontline.api.vehicle.VehicleDamageKind;
+import com.warsim.frontline.api.vehicle.VehicleDamageService;
+import com.warsim.frontline.api.vehicle.VehicleDamageServiceOutcome;
 import com.warsim.frontline.api.weapon.ShotResult;
 import com.warsim.frontline.weapons.DefaultWeaponService;
 import java.util.ArrayDeque;
@@ -58,6 +61,9 @@ final class PaperDamageAdapter {
             || battle.lifecycleRevision() != result.request().lifecycleRevision()) {
             service.recordStaleShot();
             return DamageApplicationResult.STALE_CONTEXT;
+        }
+        if (result.hit().targetType() == com.warsim.frontline.api.weapon.HitTargetType.VEHICLE) {
+            return applyVehicleDamage(result);
         }
         Player shooter = Bukkit.getPlayer(result.request().shooterUuid());
         Player target = Bukkit.getPlayer(result.hit().targetUuid());
@@ -136,6 +142,34 @@ final class PaperDamageAdapter {
             service.recordDamageApplied(result);
         }
         return pending.result;
+    }
+
+    private DamageApplicationResult applyVehicleDamage(ShotResult result) {
+        RegisteredServiceProvider<VehicleDamageService> registration =
+            Bukkit.getServicesManager().getRegistration(VehicleDamageService.class);
+        if (registration == null) return DamageApplicationResult.TARGET_INVALID;
+        var response = registration.getProvider().damageVehicleAnchor(
+            result.hit().targetUuid(),
+            result.requestedDamage(),
+            VehicleDamageKind.SMALL_ARMS,
+            Optional.of(result.request().shooterUuid()),
+            Optional.of(result.request().weaponId().toString()),
+            "weapon:" + result.request().weaponId(),
+            java.time.Instant.now()
+        );
+        if (response.outcome() == VehicleDamageServiceOutcome.APPLIED
+            || response.outcome() == VehicleDamageServiceOutcome.DESTROYED) {
+            service.recordDamageApplied(result);
+            return DamageApplicationResult.APPLIED;
+        }
+        return switch (response.outcome()) {
+            case REJECTED_ALREADY_DESTROYED -> DamageApplicationResult.NO_EFFECTIVE_DAMAGE;
+            case REJECTED_UNKNOWN_VEHICLE -> DamageApplicationResult.TARGET_INVALID;
+            case REJECTED_DISABLED -> DamageApplicationResult.NO_EFFECTIVE_DAMAGE;
+            case REJECTED_INVALID_AMOUNT -> DamageApplicationResult.NO_EFFECTIVE_DAMAGE;
+            case REJECTED_WRONG_THREAD, REJECTED_INTERNAL_ERROR -> DamageApplicationResult.INTERNAL_FAILURE;
+            default -> DamageApplicationResult.NO_EFFECTIVE_DAMAGE;
+        };
     }
 
     void handleDamageEvent(EntityDamageByEntityEvent event) {

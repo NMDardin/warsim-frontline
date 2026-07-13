@@ -7,6 +7,7 @@ import com.warsim.frontline.api.combat.FeedbackMessage;
 import com.warsim.frontline.api.combat.FeedbackPriority;
 import com.warsim.frontline.api.combat.PlayerFeedbackService;
 import com.warsim.frontline.api.match.MatchState;
+import com.warsim.frontline.api.vehicle.VehicleDamageService;
 import com.warsim.frontline.api.weapon.*;
 import com.warsim.frontline.weapons.DefaultWeaponService;
 import java.time.Instant;
@@ -144,6 +145,7 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
         }
         List<HitCandidate> candidates =
             sampler.sample(shooter, battle.matchId(), definition.maximumRange());
+        candidates = withVehicleCandidates(shooter, battle.matchId(), definition.maximumRange(), candidates);
         if ((System.nanoTime() - now) / 1_000_000L
             > configuration.core().maximumDeltaMillis()) {
             service.recordStaleShot();
@@ -342,6 +344,32 @@ final class WeaponCoordinator implements Listener, BattleRuntimeListener, AutoCl
             Bukkit.getServicesManager().getRegistration(CombatPolicyService.class);
         boolean friendlyFire = registration != null && registration.getProvider().friendlyFireEnabled();
         return new WeaponDamagePolicy(friendlyFire, configuration.core().allowSelfDamage());
+    }
+
+    private List<HitCandidate> withVehicleCandidates(
+        Player shooter,
+        UUID matchId,
+        double maximumRange,
+        List<HitCandidate> playerCandidates
+    ) {
+        int remaining = configuration.core().maximumCandidatesPerShot() - playerCandidates.size();
+        if (remaining <= 0) return playerCandidates;
+        RegisteredServiceProvider<VehicleDamageService> registration =
+            Bukkit.getServicesManager().getRegistration(VehicleDamageService.class);
+        if (registration == null) return playerCandidates;
+        var eye = shooter.getEyeLocation();
+        List<HitCandidate> vehicles = registration.getProvider().hitCandidates(
+            matchId,
+            shooter.getWorld().getName(),
+            new Vector3(eye.getX(), eye.getY(), eye.getZ()),
+            maximumRange,
+            remaining
+        );
+        if (vehicles.isEmpty()) return playerCandidates;
+        ArrayList<HitCandidate> combined = new ArrayList<>(playerCandidates.size() + vehicles.size());
+        combined.addAll(playerCandidates);
+        combined.addAll(vehicles);
+        return List.copyOf(combined);
     }
 
     private void shotFeedback(Player player, ShotResult result) {

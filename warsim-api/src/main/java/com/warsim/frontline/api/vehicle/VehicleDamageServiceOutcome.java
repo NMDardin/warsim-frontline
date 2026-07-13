@@ -1,0 +1,12 @@
+package com.warsim.frontline.api.vehicle;
+
+public enum VehicleDamageServiceOutcome {
+    APPLIED,
+    DESTROYED,
+    REJECTED_UNKNOWN_VEHICLE,
+    REJECTED_ALREADY_DESTROYED,
+    REJECTED_DISABLED,
+    REJECTED_INVALID_AMOUNT,
+    REJECTED_WRONG_THREAD,
+    REJECTED_INTERNAL_ERROR
+}

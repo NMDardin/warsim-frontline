@@ -75,3 +75,20 @@ than bending the weapon pipeline in this phase.
 Still not included: cannons, machine guns, vehicle weapons, projectiles,
 explosions, armor, penetration, passenger damage, repair tools, ticket scoring,
 database persistence, and final ModelEngine visuals.
+
+## T-020 Weapon Soft Integration
+
+T-020 adds a shared, platform-neutral `VehicleDamageService` in `warsim-api`.
+The main Paper plugin registers the service from `PaperVehicleCoordinator`;
+Weapons looks it up optionally through Bukkit `ServicesManager`.
+
+When a Weapons hitscan ray hits a managed vehicle anchor, the Weapons plugin
+applies `SMALL_ARMS` vehicle damage through the service. Missing service means
+the old weapon behavior is preserved. Vehicle inspect and combat diagnostics
+show the last attacker, weapon id, source description, damage type, amount, and
+time.
+
+This integration does not write tickets, scores, database progression, block
+ledgers, or resource-pack state. It still does not add cannons, projectiles,
+explosions, armor, penetration, passenger damage, vehicle-mounted weapons, or
+final ModelEngine visuals.

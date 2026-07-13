@@ -11,6 +11,8 @@ public record VehicleHealthSnapshot(
     boolean destroyed,
     Optional<VehicleDamageType> lastDamageType,
     Optional<UUID> lastAttackerUuid,
+    Optional<String> lastWeaponId,
+    String lastSourceDescription,
     double lastDamageAmount,
     Optional<Instant> lastDamageAt,
     boolean scheduledDespawn
@@ -22,6 +24,9 @@ public record VehicleHealthSnapshot(
         }
         lastDamageType = lastDamageType == null ? Optional.empty() : lastDamageType;
         lastAttackerUuid = lastAttackerUuid == null ? Optional.empty() : lastAttackerUuid;
+        lastWeaponId = lastWeaponId == null ? Optional.empty()
+            : lastWeaponId.map(String::trim).filter(value -> !value.isEmpty());
+        lastSourceDescription = lastSourceDescription == null ? "" : lastSourceDescription;
         lastDamageAt = lastDamageAt == null ? Optional.empty() : lastDamageAt;
     }
 
@@ -29,7 +34,8 @@ public record VehicleHealthSnapshot(
         Objects.requireNonNull(configuration, "configuration");
         return new VehicleHealthSnapshot(
             configuration.maxHealth(), configuration.maxHealth(), false,
-            Optional.empty(), Optional.empty(), 0.0, Optional.empty(), false
+            Optional.empty(), Optional.empty(), Optional.empty(), "",
+            0.0, Optional.empty(), false
         );
     }
 }

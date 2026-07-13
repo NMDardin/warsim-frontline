@@ -8,6 +8,14 @@ import com.warsim.frontline.api.battle.BattleRuntimeListener;
 import com.warsim.frontline.api.battle.BattleRuntimeSnapshot;
 import com.warsim.frontline.api.battle.WarSimBattleRuntime;
 import com.warsim.frontline.api.match.MatchState;
+import com.warsim.frontline.api.vehicle.VehicleDamageKind;
+import com.warsim.frontline.api.vehicle.VehicleDamageService;
+import com.warsim.frontline.api.vehicle.VehicleDamageServiceOutcome;
+import com.warsim.frontline.api.vehicle.VehicleDamageServiceResult;
+import com.warsim.frontline.api.weapon.AxisAlignedBox;
+import com.warsim.frontline.api.weapon.HitCandidate;
+import com.warsim.frontline.api.weapon.HitTargetType;
+import com.warsim.frontline.api.weapon.Vector3;
 import com.warsim.frontline.vehicles.VehicleCombatSnapshot;
 import com.warsim.frontline.vehicles.VehicleConfiguration;
 import com.warsim.frontline.vehicles.VehicleDamageOutcome;
@@ -24,6 +32,7 @@ import com.warsim.frontline.vehicles.VehicleSystemStatus;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -51,11 +60,17 @@ import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.projectiles.ProjectileSource;
+import org.bukkit.util.BoundingBox;
 import org.bukkit.util.Vector;
 
-public final class PaperVehicleCoordinator implements Listener, BattleRuntimeListener, AutoCloseable {
+public final class PaperVehicleCoordinator implements
+    Listener,
+    BattleRuntimeListener,
+    VehicleDamageService,
+    AutoCloseable {
     private final JavaPlugin plugin;
     private final WarSimBattleRuntime battleRuntime;
     private final VehicleConfiguration configuration;
@@ -71,6 +86,7 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
     private AutoCloseable battleSubscription;
     private int tickTaskId = -1;
     private boolean closed;
+    private boolean damageServiceRegistered;
     private long spawnAttempts;
     private long spawnSuccesses;
     private long despawnCount;
@@ -78,6 +94,8 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
     private long damageApplications;
     private String lastError;
     private String lastDamageSummary = "none";
+    private String lastWeaponId = "none";
+    private String lastSourceDescription = "none";
 
     public PaperVehicleCoordinator(
         JavaPlugin plugin,
@@ -114,6 +132,10 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
 
     public void start(WarSimCommandRegistry registry) {
         if (closed) return;
+        plugin.getServer().getServicesManager().register(
+            VehicleDamageService.class, this, plugin, ServicePriority.Normal
+        );
+        damageServiceRegistered = true;
         commandRegistration = registry.register(new VehicleCommandExtension(this));
         if (!configuration.enabled() || status == VehicleSystemStatus.FAILED) {
             return;
@@ -156,9 +178,12 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
             configuration.combatEnabled(),
             configuration.allowAdminDamage(),
             configuration.cancelVanillaAnchorDamage(),
+            damageServiceRegistered,
             vehicles.size(),
             destroyed,
             scheduled,
+            lastWeaponId,
+            lastSourceDescription,
             lastDamageSummary
         );
     }
@@ -207,8 +232,11 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
         try {
             VehicleRuntimeId runtimeId = VehicleRuntimeId.random();
             VehicleAnchor anchor = adapter.spawn(definition, runtimeId, location);
+            BattleRuntimeSnapshot battle = battleRuntime.snapshot();
+            UUID matchId = battle.available() && battle.matchState() == MatchState.PLAYING
+                ? battle.matchId() : null;
             ManagedVehicle vehicle = new ManagedVehicle(
-                runtimeId, definition, anchor, null, 0.0, Instant.now(), Instant.now()
+                runtimeId, definition, anchor, matchId, null, 0.0, Instant.now(), Instant.now()
             );
             vehicles.put(runtimeId, vehicle);
             anchors.put(anchor.entity().getUniqueId(), runtimeId);
@@ -299,12 +327,14 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
             amount,
             type,
             attackerUuid,
+            Optional.empty(),
             sourceDescription,
             Instant.now()
         ));
     }
 
     VehicleDamageResult destroy(String idText) {
+        if (!configuration.combatEnabled()) return null;
         VehicleRuntimeId runtimeId = findRuntime(idText);
         if (runtimeId == null) return null;
         ManagedVehicle vehicle = vehicles.get(runtimeId);
@@ -312,11 +342,12 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
             return rejected(runtimeId, vehicle, VehicleDamageOutcome.REJECTED_ALREADY_DESTROYED,
                 "Vehicle is already destroyed");
         }
-        return destroyVehicle(vehicle, VehicleDamageType.ADMIN, Optional.empty(),
+        return destroyVehicle(vehicle, VehicleDamageType.ADMIN, Optional.empty(), Optional.empty(),
             vehicle.currentHealth, "admin destroy", Instant.now());
     }
 
     boolean repair(String idText, Optional<Double> amount) {
+        if (!configuration.combatEnabled()) return false;
         VehicleRuntimeId runtimeId = findRuntime(idText);
         if (runtimeId == null) return false;
         ManagedVehicle vehicle = vehicles.get(runtimeId);
@@ -361,19 +392,144 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
         vehicle.currentHealth = Math.max(0.0, previous - applied);
         vehicle.lastDamageType = request.damageType();
         vehicle.lastAttackerUuid = request.attackerUuid().orElse(null);
+        vehicle.lastWeaponId = request.weaponId().orElse(null);
+        vehicle.lastSourceDescription = request.sourceDescription();
         vehicle.lastDamageAmount = applied;
         vehicle.lastDamageAt = request.occurredAt();
         vehicle.lastUpdatedAt = request.occurredAt();
+        lastWeaponId = request.weaponId().orElse("none");
+        lastSourceDescription = nullToNone(request.sourceDescription());
         damageApplications++;
         if (vehicle.currentHealth <= 0.0 && vehicle.definition.health().destroyAtZero()) {
-            return destroyVehicle(vehicle, request.damageType(), request.attackerUuid(),
+            return destroyVehicle(vehicle, request.damageType(), request.attackerUuid(), request.weaponId(),
                 applied, request.sourceDescription(), request.occurredAt(), previous);
         }
         lastDamageSummary = vehicle.runtimeId.shortText() + " " + request.damageType()
-            + " -" + format(applied) + " hp=" + format(vehicle.currentHealth);
+            + " -" + format(applied) + " hp=" + format(vehicle.currentHealth)
+            + " weapon=" + lastWeaponId + " source=" + lastSourceDescription;
         return new VehicleDamageResult(
             true, request.runtimeId(), previous, vehicle.currentHealth, applied, false,
             VehicleDamageOutcome.APPLIED, "Vehicle damage applied"
+        );
+    }
+
+    @Override
+    public boolean isManagedVehicleAnchor(UUID anchorEntityUuid) {
+        return anchorEntityUuid != null && anchors.containsKey(anchorEntityUuid);
+    }
+
+    @Override
+    public Optional<UUID> runtimeIdForAnchor(UUID anchorEntityUuid) {
+        VehicleRuntimeId runtimeId = anchorEntityUuid == null ? null : anchors.get(anchorEntityUuid);
+        return runtimeId == null ? Optional.empty() : Optional.of(runtimeId.value());
+    }
+
+    @Override
+    public List<HitCandidate> hitCandidates(
+        UUID matchId,
+        String worldName,
+        Vector3 origin,
+        double maximumRange,
+        int limit
+    ) {
+        if (closed || limit <= 0 || matchId == null || worldName == null || origin == null
+            || !Double.isFinite(maximumRange) || maximumRange <= 0.0 || !Bukkit.isPrimaryThread()) {
+            return List.of();
+        }
+        BattleRuntimeSnapshot battle = battleRuntime.snapshot();
+        if (!battle.available()
+            || battle.matchState() != MatchState.PLAYING
+            || !matchId.equals(battle.matchId())) {
+            return List.of();
+        }
+        double boundary = maximumRange + 2.0;
+        double boundarySquared = boundary * boundary;
+        ArrayList<VehicleHitSample> samples = new ArrayList<>();
+        for (ManagedVehicle vehicle : vehicles.values()) {
+            if (vehicle.state != VehicleRuntimeState.SPAWNED
+                || vehicle.matchId == null
+                || !matchId.equals(vehicle.matchId)) continue;
+            Entity entity = vehicle.anchor.entity();
+            if (!entity.isValid() || entity.isDead()
+                || entity.getWorld() == null
+                || !worldName.equals(entity.getWorld().getName())) continue;
+            Location location = entity.getLocation();
+            double dx = location.getX() - origin.x();
+            double dy = location.getY() - origin.y();
+            double dz = location.getZ() - origin.z();
+            double distanceSquared = dx * dx + dy * dy + dz * dz;
+            if (distanceSquared > boundarySquared) continue;
+            BoundingBox box = entity.getBoundingBox();
+            AxisAlignedBox body = new AxisAlignedBox(
+                box.getMinX(), box.getMinY(), box.getMinZ(),
+                box.getMaxX(), box.getMaxY(), box.getMaxZ()
+            );
+            samples.add(new VehicleHitSample(
+                distanceSquared,
+                new HitCandidate(
+                    entity.getUniqueId(), matchId, worldName, body, body, HitTargetType.VEHICLE
+                )
+            ));
+        }
+        samples.sort(Comparator.comparingDouble(VehicleHitSample::distanceSquared)
+            .thenComparing(value -> value.candidate().targetUuid().toString()));
+        if (samples.size() > limit) samples.subList(limit, samples.size()).clear();
+        return samples.stream().map(VehicleHitSample::candidate).toList();
+    }
+
+    @Override
+    public VehicleDamageServiceResult damageVehicle(
+        UUID runtimeId,
+        double amount,
+        VehicleDamageKind kind,
+        Optional<UUID> attackerUuid,
+        Optional<String> weaponId,
+        String sourceDescription,
+        Instant occurredAt
+    ) {
+        if (!Bukkit.isPrimaryThread()) {
+            return serviceRejected(runtimeId, VehicleDamageServiceOutcome.REJECTED_WRONG_THREAD,
+                "Vehicle damage must be applied on the main thread");
+        }
+        if (runtimeId == null) {
+            return serviceRejected(null, VehicleDamageServiceOutcome.REJECTED_UNKNOWN_VEHICLE,
+                "Unknown vehicle");
+        }
+        if (!Double.isFinite(amount) || amount <= 0.0) {
+            return serviceRejected(runtimeId, VehicleDamageServiceOutcome.REJECTED_INVALID_AMOUNT,
+                "Vehicle damage amount must be greater than zero");
+        }
+        VehicleRuntimeId id = new VehicleRuntimeId(runtimeId);
+        VehicleDamageResult result = applyDamage(new VehicleDamageRequest(
+            id,
+            Optional.ofNullable(vehicles.get(id)).map(vehicle -> vehicle.definition.id()),
+            amount,
+            map(kind),
+            attackerUuid,
+            weaponId,
+            sourceDescription,
+            occurredAt
+        ));
+        return serviceResult(result);
+    }
+
+    @Override
+    public VehicleDamageServiceResult damageVehicleAnchor(
+        UUID anchorEntityUuid,
+        double amount,
+        VehicleDamageKind kind,
+        Optional<UUID> attackerUuid,
+        Optional<String> weaponId,
+        String sourceDescription,
+        Instant occurredAt
+    ) {
+        VehicleRuntimeId runtimeId = anchorEntityUuid == null ? null : anchors.get(anchorEntityUuid);
+        if (runtimeId == null) {
+            return serviceRejected(null, VehicleDamageServiceOutcome.REJECTED_UNKNOWN_VEHICLE,
+                "Unknown vehicle anchor");
+        }
+        return damageVehicle(
+            runtimeId.value(), amount, kind, attackerUuid, weaponId, sourceDescription, occurredAt
         );
     }
 
@@ -443,6 +599,7 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
                 Math.max(0.0, event.getDamage()),
                 type,
                 attacker,
+                Optional.empty(),
                 "bukkit:" + event.getCause(),
                 Instant.now()
             ));
@@ -518,15 +675,60 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
             vehicle != null && vehicle.state == VehicleRuntimeState.DESTROYED, outcome, message);
     }
 
+    private VehicleDamageServiceResult serviceRejected(
+        UUID runtimeId,
+        VehicleDamageServiceOutcome outcome,
+        String message
+    ) {
+        return new VehicleDamageServiceResult(false, runtimeId, 0.0, 0.0, 0.0,
+            false, outcome, message);
+    }
+
+    private VehicleDamageServiceResult serviceResult(VehicleDamageResult result) {
+        return new VehicleDamageServiceResult(
+            result.accepted(),
+            result.runtimeId().value(),
+            result.previousHealth(),
+            result.newHealth(),
+            result.damageApplied(),
+            result.destroyed(),
+            map(result.outcome()),
+            result.message()
+        );
+    }
+
+    private static VehicleDamageServiceOutcome map(VehicleDamageOutcome outcome) {
+        return switch (outcome) {
+            case APPLIED -> VehicleDamageServiceOutcome.APPLIED;
+            case DESTROYED -> VehicleDamageServiceOutcome.DESTROYED;
+            case REJECTED_UNKNOWN_VEHICLE -> VehicleDamageServiceOutcome.REJECTED_UNKNOWN_VEHICLE;
+            case REJECTED_ALREADY_DESTROYED -> VehicleDamageServiceOutcome.REJECTED_ALREADY_DESTROYED;
+            case REJECTED_DISABLED -> VehicleDamageServiceOutcome.REJECTED_DISABLED;
+            case REJECTED_INVALID_AMOUNT -> VehicleDamageServiceOutcome.REJECTED_INVALID_AMOUNT;
+        };
+    }
+
+    private static VehicleDamageType map(VehicleDamageKind kind) {
+        return switch (kind == null ? VehicleDamageKind.UNKNOWN : kind) {
+            case ADMIN -> VehicleDamageType.ADMIN;
+            case SMALL_ARMS -> VehicleDamageType.SMALL_ARMS;
+            case IMPACT -> VehicleDamageType.IMPACT;
+            case ENVIRONMENT -> VehicleDamageType.ENVIRONMENT;
+            case SCRIPTED -> VehicleDamageType.SCRIPTED;
+            case UNKNOWN -> VehicleDamageType.UNKNOWN;
+        };
+    }
+
     private VehicleDamageResult destroyVehicle(
         ManagedVehicle vehicle,
         VehicleDamageType type,
         Optional<UUID> attackerUuid,
+        Optional<String> weaponId,
         double damageApplied,
         String sourceDescription,
         Instant occurredAt
     ) {
-        return destroyVehicle(vehicle, type, attackerUuid, damageApplied,
+        return destroyVehicle(vehicle, type, attackerUuid, weaponId, damageApplied,
             sourceDescription, occurredAt, vehicle.currentHealth);
     }
 
@@ -534,6 +736,7 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
         ManagedVehicle vehicle,
         VehicleDamageType type,
         Optional<UUID> attackerUuid,
+        Optional<String> weaponId,
         double damageApplied,
         String sourceDescription,
         Instant occurredAt,
@@ -544,12 +747,16 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
         vehicle.driverUuid = null;
         vehicle.lastDamageType = type;
         vehicle.lastAttackerUuid = attackerUuid.orElse(null);
+        vehicle.lastWeaponId = weaponId.orElse(null);
+        vehicle.lastSourceDescription = sourceDescription;
         vehicle.lastDamageAmount = damageApplied;
         vehicle.lastDamageAt = occurredAt;
         vehicle.lastUpdatedAt = occurredAt;
         scheduleDestroyedDespawn(vehicle);
+        lastWeaponId = weaponId.orElse("none");
+        lastSourceDescription = nullToNone(sourceDescription);
         lastDamageSummary = vehicle.runtimeId.shortText() + " destroyed by " + type
-            + " source=" + nullToNone(sourceDescription);
+            + " weapon=" + lastWeaponId + " source=" + lastSourceDescription;
         return new VehicleDamageResult(
             true, vehicle.runtimeId, previousHealth, 0.0, damageApplied, true,
             VehicleDamageOutcome.DESTROYED, "Vehicle destroyed"
@@ -614,6 +821,10 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
         } catch (Exception exception) {
             plugin.getLogger().log(Level.WARNING, "[warsim-vehicle] Command unregister failed.", exception);
         }
+        if (damageServiceRegistered) {
+            plugin.getServer().getServicesManager().unregister(VehicleDamageService.class, this);
+            damageServiceRegistered = false;
+        }
     }
 
     private static String format(double value) {
@@ -663,15 +874,21 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
     private record VehicleAnchor(Entity entity, String bindingStatus) {
     }
 
+    private record VehicleHitSample(double distanceSquared, HitCandidate candidate) {
+    }
+
     private final class ManagedVehicle {
         private final VehicleRuntimeId runtimeId;
         private final VehicleDefinition definition;
         private final VehicleAnchor anchor;
+        private final UUID matchId;
         private UUID driverUuid;
         private double speed;
         private double currentHealth;
         private VehicleDamageType lastDamageType;
         private UUID lastAttackerUuid;
+        private String lastWeaponId;
+        private String lastSourceDescription = "";
         private double lastDamageAmount;
         private Instant lastDamageAt;
         private int destroyedDespawnTaskId = -1;
@@ -683,6 +900,7 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
             VehicleRuntimeId runtimeId,
             VehicleDefinition definition,
             VehicleAnchor anchor,
+            UUID matchId,
             UUID driverUuid,
             double speed,
             Instant spawnedAt,
@@ -691,6 +909,7 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
             this.runtimeId = runtimeId;
             this.definition = definition;
             this.anchor = anchor;
+            this.matchId = matchId;
             this.driverUuid = driverUuid;
             this.speed = speed;
             this.currentHealth = definition.health().maxHealth();
@@ -712,6 +931,8 @@ public final class PaperVehicleCoordinator implements Listener, BattleRuntimeLis
                 state == VehicleRuntimeState.DESTROYED,
                 Optional.ofNullable(lastDamageType),
                 Optional.ofNullable(lastAttackerUuid),
+                Optional.ofNullable(lastWeaponId),
+                lastSourceDescription,
                 lastDamageAmount,
                 Optional.ofNullable(lastDamageAt),
                 destroyedDespawnTaskId != -1

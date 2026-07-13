@@ -28,13 +28,22 @@ public final class HitscanBallisticsService implements BallisticsService {
     }
 
     private static HitResult hitCandidate(Ray ray, HitCandidate candidate, double epsilon) {
+        if (candidate.targetType() == HitTargetType.VEHICLE) {
+            OptionalDouble body = RayAabbIntersection.intersect(ray, candidate.bodyBox(), epsilon);
+            return body.isEmpty() ? HitResult.miss()
+                : new HitResult(candidate.targetUuid(), HitZone.BODY, body.getAsDouble(), candidate.targetType());
+        }
         OptionalDouble head = RayAabbIntersection.intersect(ray, candidate.headBox(), epsilon);
         OptionalDouble body = RayAabbIntersection.intersect(ray, candidate.bodyBox(), epsilon);
         if (head.isEmpty() && body.isEmpty()) return HitResult.miss();
         if (head.isPresent() && (body.isEmpty()
             || head.getAsDouble() <= body.getAsDouble() + epsilon)) {
-            return new HitResult(candidate.targetUuid(), HitZone.HEAD, head.getAsDouble());
+            return new HitResult(
+                candidate.targetUuid(), HitZone.HEAD, head.getAsDouble(), candidate.targetType()
+            );
         }
-        return new HitResult(candidate.targetUuid(), HitZone.BODY, body.getAsDouble());
+        return new HitResult(
+            candidate.targetUuid(), HitZone.BODY, body.getAsDouble(), candidate.targetType()
+        );
     }
 }

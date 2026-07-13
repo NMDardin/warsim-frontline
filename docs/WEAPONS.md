@@ -65,3 +65,15 @@ Weapons commands remain under the main `/warsim` root:
 T-016 does not add artillery, vehicles, explosive weapons, automatic weapons,
 new ballistics, recoil animation, resource-pack final art, or client acceptance
 results.
+
+## T-020 Vehicle Hits
+
+Weapons remains an independent Paper plugin. It optionally looks up
+`VehicleDamageService` through Bukkit `ServicesManager`; it does not import the
+main Paper implementation.
+
+If a shot hits a managed vehicle anchor, the existing hitscan damage curve is
+used as body damage and sent as `SMALL_ARMS` vehicle damage with attacker,
+weapon id, and source metadata. Player hit behavior, ammo, reload, fire rate,
+formal T-016 weapon stats, shotgun single-hitscan behavior, and combat
+correlation for player damage remain unchanged.

@@ -367,3 +367,12 @@ tickets are still charged only by the T-011 deployment transaction.
 The workstation implementation does not run tests, Paper, Velocity, CraftEngine,
 Redis, PostgreSQL, synthetic scenarios or client validation. See
 `docs/COMBAT_OUTCOMES_AND_HUD.md`.
+
+## T-020 Vehicle Damage Soft Integration
+
+T-020 adds a shared `VehicleDamageService` so the independent Weapons Paper
+plugin can optionally damage managed vehicle anchors through the main Paper
+vehicle runtime. Hits use `SMALL_ARMS` vehicle damage and record attacker,
+weapon id, and source diagnostics. It does not add vehicle weapons, explosions,
+armor, passenger damage, ticket scoring, database progression, or client
+validation.

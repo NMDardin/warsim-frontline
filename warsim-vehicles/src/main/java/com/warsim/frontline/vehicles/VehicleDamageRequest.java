@@ -11,6 +11,7 @@ public record VehicleDamageRequest(
     double amount,
     VehicleDamageType damageType,
     Optional<UUID> attackerUuid,
+    Optional<String> weaponId,
     String sourceDescription,
     Instant occurredAt
 ) {
@@ -22,6 +23,8 @@ public record VehicleDamageRequest(
         }
         damageType = damageType == null ? VehicleDamageType.UNKNOWN : damageType;
         attackerUuid = attackerUuid == null ? Optional.empty() : attackerUuid;
+        weaponId = weaponId == null ? Optional.empty()
+            : weaponId.map(String::trim).filter(value -> !value.isEmpty());
         sourceDescription = sourceDescription == null ? "" : sourceDescription;
         occurredAt = occurredAt == null ? Instant.now() : occurredAt;
     }
